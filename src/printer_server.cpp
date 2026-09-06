@@ -1110,9 +1110,6 @@ bool PrinterServer::CreateDriverArchiveFromManifest(const DriverManifestInfo& in
         L"$zipNs = $shell.NameSpace($zipPath)\n"
         L"$srcNs = $shell.NameSpace($sourcePath)\n"
         L"if (($null -eq $zipNs) -or ($null -eq $srcNs)) { throw 'Shell.Application ZIP namespace unavailable.' }\n"
-        // PowerShell 2.0, which is the default on Windows 7, has no -File parameter.
-        L"$sourceItems = @(Get-ChildItem -LiteralPath $sourcePath -Force | Where-Object { -not $_.PSIsContainer })\n"
-        L"$expected = $sourceItems.Count\n"
         L"$zipNs.CopyHere($srcNs.Items(), 16)\n"
         L"$lastLength = -1\n"
         L"$stableChecks = 0\n"
@@ -1122,9 +1119,10 @@ bool PrinterServer::CreateDriverArchiveFromManifest(const DriverManifestInfo& in
         L"    $zipItem = Get-Item -LiteralPath $zipPath -ErrorAction SilentlyContinue\n"
         L"    if ($null -ne $zipItem) {\n"
         L"        $length = $zipItem.Length\n"
-        L"        if (($zipNs.Items().Count -ge $expected) -and ($length -gt 22)) {\n"
+        // Shell.Application.CopyHere is asynchronous and Items().Count is unreliable on Windows 7.
+        L"        if ($length -gt 22) {\n"
         L"            if ($length -eq $lastLength) { $stableChecks++ } else { $stableChecks = 0 }\n"
-        L"            if ($stableChecks -ge 2) { $completed = $true; break }\n"
+        L"            if ($stableChecks -ge 6) { $completed = $true; break }\n"
         L"        }\n"
         L"        $lastLength = $length\n"
         L"    }\n"
@@ -1139,7 +1137,9 @@ bool PrinterServer::CreateDriverArchiveFromManifest(const DriverManifestInfo& in
 
     if (!ran || exitCode != 0 || !FileExists(archivePath)) {
         if (errorText) {
-            *errorText = output.empty() ? L"PowerShell ZIP creation failed." : output;
+            *errorText = output.empty()
+                ? (ran ? L"PowerShell ZIP creation failed." : L"PowerShell process could not be started: " + FormatLastErrorMessage())
+                : output;
         }
         DeleteFileW(archivePath.c_str());
         return false;
@@ -1198,9 +1198,6 @@ bool PrinterServer::CreateDriverArchiveFromFolder(const std::wstring& sourceFold
         L"$zipNs = $shell.NameSpace($zipPath)\n"
         L"$srcNs = $shell.NameSpace($sourcePath)\n"
         L"if (($null -eq $zipNs) -or ($null -eq $srcNs)) { throw 'Shell.Application ZIP namespace unavailable.' }\n"
-        // Keep the top-level item count aligned with Shell.Application.Items().
-        L"$sourceItems = @(Get-ChildItem -LiteralPath $sourcePath -Force)\n"
-        L"$expected = $sourceItems.Count\n"
         L"$zipNs.CopyHere($srcNs.Items(), 16)\n"
         L"$lastLength = -1\n"
         L"$stableChecks = 0\n"
@@ -1210,9 +1207,9 @@ bool PrinterServer::CreateDriverArchiveFromFolder(const std::wstring& sourceFold
         L"    $zipItem = Get-Item -LiteralPath $zipPath -ErrorAction SilentlyContinue\n"
         L"    if ($null -ne $zipItem) {\n"
         L"        $length = $zipItem.Length\n"
-        L"        if (($zipNs.Items().Count -ge $expected) -and ($length -gt 22)) {\n"
+        L"        if ($length -gt 22) {\n"
         L"            if ($length -eq $lastLength) { $stableChecks++ } else { $stableChecks = 0 }\n"
-        L"            if ($stableChecks -ge 2) { $completed = $true; break }\n"
+        L"            if ($stableChecks -ge 6) { $completed = $true; break }\n"
         L"        }\n"
         L"        $lastLength = $length\n"
         L"    }\n"
@@ -1227,7 +1224,9 @@ bool PrinterServer::CreateDriverArchiveFromFolder(const std::wstring& sourceFold
 
     if (!ran || exitCode != 0 || !FileExists(archivePath)) {
         if (errorText) {
-            *errorText = output.empty() ? L"PowerShell ZIP creation failed for the driver folder." : output;
+            *errorText = output.empty()
+                ? (ran ? L"PowerShell ZIP creation failed for the driver folder." : L"PowerShell process could not be started: " + FormatLastErrorMessage())
+                : output;
         }
         DeleteFileW(archivePath.c_str());
         return false;
