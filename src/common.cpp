@@ -454,59 +454,6 @@ bool RunHiddenProcess(const std::wstring& commandLine, DWORD* exitCode, std::wst
     return true;
 }
 
-bool RunPowerShellScript(const std::wstring& script, DWORD* exitCode, std::wstring* capturedStdout) {
-    wchar_t tempPath[MAX_PATH] = {};
-    if (::GetTempPathW(_countof(tempPath), tempPath) == 0) {
-        return false;
-    }
-
-    wchar_t tempFile[MAX_PATH] = {};
-    if (::GetTempFileNameW(tempPath, L"psc", 0, tempFile) == 0) {
-        return false;
-    }
-
-    const std::wstring scriptPath = std::wstring(tempFile) + L".ps1";
-    ::MoveFileExW(tempFile, scriptPath.c_str(), MOVEFILE_REPLACE_EXISTING);
-
-    if (!WriteUtf8File(scriptPath, WideToUtf8(script), true)) {
-        ::DeleteFileW(scriptPath.c_str());
-        return false;
-    }
-
-    std::vector<std::wstring> powershellCandidates;
-    wchar_t systemDirectoryBuffer[MAX_PATH] = {};
-    const UINT systemDirectoryLength = ::GetSystemDirectoryW(systemDirectoryBuffer, _countof(systemDirectoryBuffer));
-    if (systemDirectoryLength > 0 && systemDirectoryLength < _countof(systemDirectoryBuffer)) {
-        powershellCandidates.push_back(JoinPath(systemDirectoryBuffer, L"WindowsPowerShell\\v1.0\\powershell.exe"));
-    }
-
-    const std::wstring windowsDirectory = GetEnvVar(L"WINDIR").empty() ? L"C:\\Windows" : GetEnvVar(L"WINDIR");
-    powershellCandidates.push_back(JoinPath(JoinPath(windowsDirectory, L"System32"), L"WindowsPowerShell\\v1.0\\powershell.exe"));
-    powershellCandidates.push_back(JoinPath(JoinPath(windowsDirectory, L"SysWOW64"), L"WindowsPowerShell\\v1.0\\powershell.exe"));
-
-    std::wstring powershellPath;
-    for (const std::wstring& candidate : powershellCandidates) {
-        if (FileExists(candidate)) {
-            powershellPath = candidate;
-            break;
-        }
-    }
-
-    // Keep PATH as a final fallback for non-standard Windows installations.
-    if (powershellPath.empty()) {
-        powershellPath = L"powershell.exe";
-    }
-
-    const std::wstring command = L"\"" + powershellPath + L"\" -NoProfile -ExecutionPolicy Bypass -File \"" + scriptPath + L"\"";
-    const bool result = RunHiddenProcess(command, exitCode, capturedStdout);
-    const DWORD processError = result ? ERROR_SUCCESS : ::GetLastError();
-    ::DeleteFileW(scriptPath.c_str());
-    if (!result) {
-        ::SetLastError(processError);
-    }
-    return result;
-}
-
 bool IsRunningAsAdmin() {
     SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY;
     PSID adminGroup = nullptr;
@@ -610,9 +557,4 @@ std::wstring GetLocalIPv4Address() {
 bool OpenUrlInBrowser(const std::wstring& url) {
     HINSTANCE result = ::ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     return reinterpret_cast<INT_PTR>(result) > 32;
-}
-
-std::wstring QuoteForPowerShell(const std::wstring& value) {
-    std::wstring escaped = ReplaceAll(value, L"'", L"''");
-    return L"'" + escaped + L"'";
 }

@@ -69,6 +69,195 @@ bool SendAll(SOCKET socketHandle, const char* data, std::size_t size) {
     return true;
 }
 
+struct ZipSourceEntry {
+    std::wstring sourcePath;
+    std::wstring archivePath;
+};
+
+void WriteZipUInt16(std::ofstream& output, std::uint16_t value) {
+    const unsigned char bytes[2] = {
+        static_cast<unsigned char>(value & 0xff),
+        static_cast<unsigned char>((value >> 8) & 0xff)
+    };
+    output.write(reinterpret_cast<const char*>(bytes), sizeof(bytes));
+}
+
+void WriteZipUInt32(std::ofstream& output, std::uint32_t value) {
+    const unsigned char bytes[4] = {
+        static_cast<unsigned char>(value & 0xff),
+        static_cast<unsigned char>((value >> 8) & 0xff),
+        static_cast<unsigned char>((value >> 16) & 0xff),
+        static_cast<unsigned char>((value >> 24) & 0xff)
+    };
+    output.write(reinterpret_cast<const char*>(bytes), sizeof(bytes));
+}
+
+std::uint32_t CalculateCrc32(const std::vector<unsigned char>& data) {
+    std::uint32_t crc = 0xffffffffu;
+    for (unsigned char value : data) {
+        crc ^= value;
+        for (int bit = 0; bit < 8; ++bit) {
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+        }
+    }
+    return ~crc;
+}
+
+bool CreateStoredZipArchive(const std::vector<ZipSourceEntry>& entries,
+                            const std::wstring& archivePath,
+                            std::wstring* errorText) {
+    struct CentralEntry {
+        std::string name;
+        std::uint32_t crc = 0;
+        std::uint32_t size = 0;
+        std::uint32_t offset = 0;
+    };
+
+    std::ofstream output(archivePath, std::ios::binary | std::ios::trunc);
+    if (!output.is_open()) {
+        if (errorText) {
+            *errorText = L"Unable to create the driver ZIP file.";
+        }
+        return false;
+    }
+
+    std::vector<CentralEntry> centralEntries;
+    centralEntries.reserve(entries.size());
+
+    for (const ZipSourceEntry& entry : entries) {
+        std::ifstream input(entry.sourcePath, std::ios::binary | std::ios::ate);
+        if (!input.is_open()) {
+            if (errorText) {
+                *errorText = L"Unable to read a driver file while creating the ZIP archive.";
+            }
+            return false;
+        }
+
+        const std::streampos end = input.tellg();
+        if (end < 0 || static_cast<std::uint64_t>(end) > 0xffffffffull) {
+            if (errorText) {
+                *errorText = L"A driver file is too large for the ZIP archive.";
+            }
+            return false;
+        }
+
+        const std::size_t size = static_cast<std::size_t>(end);
+        std::vector<unsigned char> data(size);
+        input.seekg(0, std::ios::beg);
+        if (size > 0) {
+            input.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));
+            if (!input) {
+                if (errorText) {
+                    *errorText = L"Unable to read a driver file while creating the ZIP archive.";
+                }
+                return false;
+            }
+        }
+
+        std::string archiveName = WideToUtf8(ReplaceAll(entry.archivePath, L"\\", L"/"));
+        if (archiveName.empty() || archiveName.size() > 0xffffu) {
+            if (errorText) {
+                *errorText = L"A driver file name is invalid for the ZIP archive.";
+            }
+            return false;
+        }
+
+        const std::streampos offsetPosition = output.tellp();
+        if (offsetPosition < 0 || static_cast<std::uint64_t>(offsetPosition) > 0xffffffffull) {
+            if (errorText) {
+                *errorText = L"The driver ZIP archive is too large.";
+            }
+            return false;
+        }
+
+        const std::uint32_t crc = CalculateCrc32(data);
+        const std::uint32_t fileSize = static_cast<std::uint32_t>(size);
+        WriteZipUInt32(output, 0x04034b50u);
+        WriteZipUInt16(output, 20);
+        WriteZipUInt16(output, 0x0800);  // UTF-8 file names.
+        WriteZipUInt16(output, 0);       // Store without compression.
+        WriteZipUInt16(output, 0);       // File time.
+        WriteZipUInt16(output, 0);       // File date.
+        WriteZipUInt32(output, crc);
+        WriteZipUInt32(output, fileSize);
+        WriteZipUInt32(output, fileSize);
+        WriteZipUInt16(output, static_cast<std::uint16_t>(archiveName.size()));
+        WriteZipUInt16(output, 0);
+        output.write(archiveName.data(), static_cast<std::streamsize>(archiveName.size()));
+        if (!data.empty()) {
+            output.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        }
+
+        centralEntries.push_back({archiveName,
+                                  crc,
+                                  fileSize,
+                                  static_cast<std::uint32_t>(offsetPosition)});
+        if (!output) {
+            if (errorText) {
+                *errorText = L"Unable to write the driver ZIP archive.";
+            }
+            return false;
+        }
+    }
+
+    const std::streampos centralOffsetPosition = output.tellp();
+    if (centralOffsetPosition < 0 || static_cast<std::uint64_t>(centralOffsetPosition) > 0xffffffffull) {
+        if (errorText) {
+            *errorText = L"The driver ZIP archive is too large.";
+        }
+        return false;
+    }
+
+    for (const CentralEntry& entry : centralEntries) {
+        WriteZipUInt32(output, 0x02014b50u);
+        WriteZipUInt16(output, 20);
+        WriteZipUInt16(output, 20);
+        WriteZipUInt16(output, 0x0800);
+        WriteZipUInt16(output, 0);
+        WriteZipUInt16(output, 0);
+        WriteZipUInt16(output, 0);
+        WriteZipUInt32(output, entry.crc);
+        WriteZipUInt32(output, entry.size);
+        WriteZipUInt32(output, entry.size);
+        WriteZipUInt16(output, static_cast<std::uint16_t>(entry.name.size()));
+        WriteZipUInt16(output, 0);
+        WriteZipUInt16(output, 0);
+        WriteZipUInt16(output, 0);
+        WriteZipUInt16(output, 0);
+        WriteZipUInt32(output, 0);
+        WriteZipUInt32(output, entry.offset);
+        output.write(entry.name.data(), static_cast<std::streamsize>(entry.name.size()));
+    }
+
+    const std::streampos endPosition = output.tellp();
+    if (endPosition < 0 || static_cast<std::uint64_t>(endPosition) > 0xffffffffull) {
+        if (errorText) {
+            *errorText = L"The driver ZIP archive is too large.";
+        }
+        return false;
+    }
+
+    const std::uint64_t centralOffset = static_cast<std::uint64_t>(centralOffsetPosition);
+    const std::uint64_t centralSize = static_cast<std::uint64_t>(endPosition) - centralOffset;
+    if (centralEntries.size() > 0xffffu || centralSize > 0xffffffffull) {
+        if (errorText) {
+            *errorText = L"The driver ZIP archive contains too many files.";
+        }
+        return false;
+    }
+
+    WriteZipUInt32(output, 0x06054b50u);
+    WriteZipUInt16(output, 0);
+    WriteZipUInt16(output, 0);
+    WriteZipUInt16(output, static_cast<std::uint16_t>(centralEntries.size()));
+    WriteZipUInt16(output, static_cast<std::uint16_t>(centralEntries.size()));
+    WriteZipUInt32(output, static_cast<std::uint32_t>(centralSize));
+    WriteZipUInt32(output, static_cast<std::uint32_t>(centralOffset));
+    WriteZipUInt16(output, 0);
+    output.flush();
+    return output.good();
+}
+
 std::wstring GetRegistryStringValue(HKEY rootKey, const std::wstring& subKey, const std::wstring& valueName) {
     HKEY keyHandle = nullptr;
     if (::RegOpenKeyExW(rootKey, subKey.c_str(), 0, KEY_READ, &keyHandle) != ERROR_SUCCESS) {
@@ -1077,6 +1266,8 @@ bool PrinterServer::CreateDriverArchiveFromManifest(const DriverManifestInfo& in
     EnsureDirectory(tempFiles);
 
     int duplicateIndex = 1;
+    std::vector<ZipSourceEntry> zipEntries;
+    zipEntries.reserve(info.files.size());
     for (const std::wstring& sourcePath : info.files) {
         std::wstring fileName = sourcePath.substr(sourcePath.find_last_of(L"\\/") + 1);
         std::wstring destPath = JoinPath(tempFiles, fileName);
@@ -1096,9 +1287,23 @@ bool PrinterServer::CreateDriverArchiveFromManifest(const DriverManifestInfo& in
             DeleteDirectoryTree(tempRoot);
             return false;
         }
+        zipEntries.push_back({destPath, destPath.substr(tempFiles.size() + 1)});
     }
 
     DeleteFileW(archivePath.c_str());
+    std::wstring archiveError;
+    const bool created = CreateStoredZipArchive(zipEntries, archivePath, &archiveError);
+    DeleteDirectoryTree(tempRoot);
+    if (!created || !FileExists(archivePath)) {
+        if (errorText) {
+            *errorText = archiveError.empty() ? L"C++ ZIP creation failed." : archiveError;
+        }
+        DeleteFileW(archivePath.c_str());
+        return false;
+    }
+    return true;
+
+#if 0
 
     std::wstring zipScript =
         L"$ErrorActionPreference = 'Stop'\n"
@@ -1146,6 +1351,7 @@ bool PrinterServer::CreateDriverArchiveFromManifest(const DriverManifestInfo& in
         return false;
     }
     return true;
+#endif
 }
 
 bool PrinterServer::CreateDriverArchiveFromFolder(const std::wstring& sourceFolder, const std::wstring& archivePath, std::wstring* errorText) const {
@@ -1169,6 +1375,8 @@ bool PrinterServer::CreateDriverArchiveFromFolder(const std::wstring& sourceFold
     const std::wstring tempFiles = JoinPath(tempRoot, L"files");
     EnsureDirectory(tempFiles);
 
+    std::vector<ZipSourceEntry> zipEntries;
+    zipEntries.reserve(files.size());
     for (const std::wstring& sourcePath : files) {
         std::wstring relativePath = sourcePath.substr(sourceFolder.size());
         while (!relativePath.empty() && (relativePath.front() == L'\\' || relativePath.front() == L'/')) {
@@ -1186,9 +1394,23 @@ bool PrinterServer::CreateDriverArchiveFromFolder(const std::wstring& sourceFold
             DeleteDirectoryTree(tempRoot);
             return false;
         }
+        zipEntries.push_back({destPath, relativePath});
     }
 
     DeleteFileW(archivePath.c_str());
+    std::wstring archiveError;
+    const bool created = CreateStoredZipArchive(zipEntries, archivePath, &archiveError);
+    DeleteDirectoryTree(tempRoot);
+    if (!created || !FileExists(archivePath)) {
+        if (errorText) {
+            *errorText = archiveError.empty() ? L"C++ ZIP creation failed for the driver folder." : archiveError;
+        }
+        DeleteFileW(archivePath.c_str());
+        return false;
+    }
+    return true;
+
+#if 0
     std::wstring zipScript =
         L"$ErrorActionPreference = 'Stop'\n"
         L"$zipPath = " + QuoteForPowerShell(archivePath) + L"\n"
@@ -1234,6 +1456,7 @@ bool PrinterServer::CreateDriverArchiveFromFolder(const std::wstring& sourceFold
         return false;
     }
     return true;
+#endif
 }
 
 bool PrinterServer::EnsureDriverArchive(const WebPrinterEntry& entry, std::wstring* archivePath, std::wstring* errorText) {
@@ -1323,6 +1546,391 @@ void PrinterServer::DriverPackagingWorker() {
 }
 
 std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& entry) const {
+    const AppConfig config = GetConfigCopy();
+    LocalizationManager localizer;
+    localizer.Initialize(config.language);
+
+    // Generate an ASCII-only VBScript source so the batch file remains safe on legacy code pages.
+    const auto vbString = [](const std::wstring& value) {
+        if (value.empty()) {
+            return std::wstring(L"\"\"");
+        }
+
+        std::wostringstream expression;
+        for (wchar_t character : value) {
+            if (expression.tellp() > 0) {
+                expression << L" & ";
+            }
+            expression << L"ChrW(&H"
+                       << std::uppercase << std::hex << std::setw(4) << std::setfill(L'0')
+                       << (static_cast<unsigned int>(character) & 0xffffu)
+                       << L")";
+        }
+        return expression.str();
+    };
+
+    const auto appendVbLine = [](std::wstring* script, const std::wstring& line) {
+        script->append(line);
+        script->append(L"\r\n");
+    };
+
+    DriverManifestInfo manifest;
+    std::wstring manifestError;
+    std::wstring infName;
+    if (QueryDriverManifest(entry, &manifest, &manifestError)) {
+        infName = manifest.infPath.substr(manifest.infPath.find_last_of(L"\\/") + 1);
+    }
+
+    const std::wstring successMessage = ReplaceAll(localizer.Get(L"installer_success_message"),
+                                                   L"__PRINTER_NAME__", entry.printerName);
+    std::wstring vbScript;
+    vbScript.reserve(26000);
+    appendVbLine(&vbScript, L"Option Explicit");
+    appendVbLine(&vbScript, L"Dim fso, shell, scriptDir, archiveName, archivePath, tempRoot, tempDir");
+    appendVbLine(&vbScript, L"Dim printerName, requestedDriverName, driverName, portName, hostName, hostIp, portNumber");
+    appendVbLine(&vbScript, L"Dim driverInfName, successTitle, successMessage, missingTitle, missingMessage");
+    appendVbLine(&vbScript, L"Dim queueFailedTitle, queueFailedMessage, extractArchiveError, createPortError");
+    appendVbLine(&vbScript, L"Dim packageExpanded, queueCreated, installedDriver, driverArchiveExists");
+    appendVbLine(&vbScript, L"Dim cscriptPath, rundll32Path");
+    appendVbLine(&vbScript, LR"(Set fso = CreateObject("Scripting.FileSystemObject"))");
+    appendVbLine(&vbScript, LR"(Set shell = CreateObject("WScript.Shell"))");
+    appendVbLine(&vbScript, LR"(scriptDir = shell.Environment("PROCESS")("SCRIPT_DIR"))");
+    appendVbLine(&vbScript, LR"(If Len(Trim(scriptDir)) = 0 Then scriptDir = fso.GetParentFolderName(WScript.ScriptFullName))");
+    appendVbLine(&vbScript, L"archiveName = " + vbString(entry.driverArchiveName));
+    appendVbLine(&vbScript, L"archivePath = fso.BuildPath(scriptDir, archiveName)");
+    appendVbLine(&vbScript, LR"(tempDir = shell.ExpandEnvironmentStrings("%TEMP%"))");
+    appendVbLine(&vbScript, LR"(tempRoot = fso.BuildPath(tempDir, "PrtEasyServer_" & fso.GetTempName))");
+    appendVbLine(&vbScript, L"printerName = " + vbString(entry.printerName));
+    appendVbLine(&vbScript, L"requestedDriverName = " + vbString(entry.driverName));
+    appendVbLine(&vbScript, L"driverName = requestedDriverName");
+    appendVbLine(&vbScript, L"portName = " + vbString(entry.tcpPortName));
+    appendVbLine(&vbScript, L"hostName = " + vbString(entry.hostName));
+    appendVbLine(&vbScript, L"hostIp = " + vbString(entry.hostIp));
+    appendVbLine(&vbScript, L"portNumber = " + std::to_wstring(entry.port));
+    appendVbLine(&vbScript, L"driverInfName = " + vbString(infName));
+    appendVbLine(&vbScript, L"successTitle = " + vbString(localizer.Get(L"installer_success_title")));
+    appendVbLine(&vbScript, L"successMessage = " + vbString(successMessage));
+    appendVbLine(&vbScript, L"missingTitle = " + vbString(localizer.Get(L"installer_missing_title")));
+    appendVbLine(&vbScript, L"missingMessage = " + vbString(localizer.Get(L"installer_missing_message")));
+    appendVbLine(&vbScript, L"queueFailedTitle = " + vbString(localizer.Get(L"installer_queue_failed_title")));
+    appendVbLine(&vbScript, L"queueFailedMessage = " + vbString(localizer.Get(L"installer_queue_failed_message")));
+    appendVbLine(&vbScript, L"extractArchiveError = " + vbString(localizer.Get(L"installer_error_extract_archive")));
+    appendVbLine(&vbScript, L"createPortError = " + vbString(localizer.Get(L"installer_error_create_port")));
+    appendVbLine(&vbScript, L"cscriptPath = GetSystemFile(\"cscript.exe\")");
+    appendVbLine(&vbScript, L"rundll32Path = GetSystemFile(\"rundll32.exe\")");
+
+    appendVbLine(&vbScript, L"Function GetSystemFile(fileName)");
+    appendVbLine(&vbScript, LR"(    Dim candidate)"
+    );
+    appendVbLine(&vbScript, LR"(    candidate = shell.ExpandEnvironmentStrings("%WINDIR%") & "\System32\" & fileName)"
+    );
+    appendVbLine(&vbScript, L"    If fso.FileExists(candidate) Then GetSystemFile = candidate: Exit Function");
+    appendVbLine(&vbScript, LR"(    candidate = shell.ExpandEnvironmentStrings("%WINDIR%") & "\SysWOW64\" & fileName)"
+    );
+    appendVbLine(&vbScript, L"    If fso.FileExists(candidate) Then GetSystemFile = candidate: Exit Function");
+    appendVbLine(&vbScript, L"    GetSystemFile = fileName");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function QuoteArg(value)");
+    appendVbLine(&vbScript, L"    QuoteArg = Chr(34) & Replace(CStr(value), Chr(34), Chr(34) & Chr(34)) & Chr(34)");
+    appendVbLine(&vbScript, L"End Function");
+    appendVbLine(&vbScript, L"Function EscapeWql(value)");
+    appendVbLine(&vbScript, L"    EscapeWql = Replace(CStr(value), \"'\", \"''\")");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function RunCommand(commandLine)");
+    appendVbLine(&vbScript, L"    Dim result");
+    appendVbLine(&vbScript, L"    On Error Resume Next");
+    appendVbLine(&vbScript, L"    Err.Clear");
+    appendVbLine(&vbScript, L"    result = shell.Run(commandLine, 0, True)");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then result = -1");
+    appendVbLine(&vbScript, L"    Err.Clear");
+    appendVbLine(&vbScript, L"    On Error GoTo 0");
+    appendVbLine(&vbScript, L"    RunCommand = result");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function FindPrintingScript(scriptName)");
+    appendVbLine(&vbScript, L"    Dim baseFolder, candidates, candidate");
+    appendVbLine(&vbScript, LR"(    baseFolder = shell.ExpandEnvironmentStrings("%WINDIR%") & "\System32\Printing_Admin_Scripts\")"
+    );
+    appendVbLine(&vbScript, L"    candidates = Array(baseFolder & \"en-US\\\" & scriptName, baseFolder & \"zh-CN\\\" & scriptName, baseFolder & \"zh-TW\\\" & scriptName, baseFolder & scriptName)");
+    appendVbLine(&vbScript, L"    For Each candidate In candidates");
+    appendVbLine(&vbScript, L"        If fso.FileExists(candidate) Then FindPrintingScript = candidate: Exit Function");
+    appendVbLine(&vbScript, L"    Next");
+    appendVbLine(&vbScript, L"    FindPrintingScript = \"\"");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function OpenWmiService()");
+    appendVbLine(&vbScript, L"    On Error Resume Next");
+    appendVbLine(&vbScript, LR"(    Set OpenWmiService = GetObject("winmgmts:\\.\root\cimv2"))"
+    );
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then Set OpenWmiService = Nothing");
+    appendVbLine(&vbScript, L"    Err.Clear");
+    appendVbLine(&vbScript, L"    On Error GoTo 0");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function PrinterPortExists(targetName)");
+    appendVbLine(&vbScript, L"    Dim service, items, item");
+    appendVbLine(&vbScript, L"    PrinterPortExists = False");
+    appendVbLine(&vbScript, L"    On Error Resume Next");
+    appendVbLine(&vbScript, L"    Set service = OpenWmiService()");
+    appendVbLine(&vbScript, L"    If service Is Nothing Then On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    Set items = service.ExecQuery(\"SELECT Name FROM Win32_TCPIPPrinterPort WHERE Name='\" & EscapeWql(targetName) & \"'\")");
+    appendVbLine(&vbScript, L"    For Each item In items");
+    appendVbLine(&vbScript, L"        PrinterPortExists = True");
+    appendVbLine(&vbScript, L"        Exit For");
+    appendVbLine(&vbScript, L"    Next");
+    appendVbLine(&vbScript, L"    Err.Clear");
+    appendVbLine(&vbScript, L"    On Error GoTo 0");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function EnsurePrinterPort()");
+    appendVbLine(&vbScript, L"    Dim scriptPath, commandLine, result, targetHost");
+    appendVbLine(&vbScript, L"    EnsurePrinterPort = False");
+    appendVbLine(&vbScript, L"    If PrinterPortExists(portName) Then EnsurePrinterPort = True: Exit Function");
+    appendVbLine(&vbScript, L"    scriptPath = FindPrintingScript(\"prnport.vbs\")");
+    appendVbLine(&vbScript, L"    If Len(scriptPath) = 0 Then Exit Function");
+    appendVbLine(&vbScript, L"    targetHost = hostName");
+    appendVbLine(&vbScript, L"    commandLine = QuoteArg(cscriptPath) & \" //nologo \" & QuoteArg(scriptPath) & \" -a -r \" & QuoteArg(portName) & \" -h \" & QuoteArg(targetHost) & \" -o raw -n \" & CStr(portNumber)");
+    appendVbLine(&vbScript, L"    result = RunCommand(commandLine)");
+    appendVbLine(&vbScript, L"    WScript.Sleep 500");
+    appendVbLine(&vbScript, L"    If PrinterPortExists(portName) Then EnsurePrinterPort = True: Exit Function");
+    appendVbLine(&vbScript, L"    If Len(hostIp) > 0 And LCase(hostIp) <> LCase(targetHost) Then");
+    appendVbLine(&vbScript, L"        commandLine = QuoteArg(cscriptPath) & \" //nologo \" & QuoteArg(scriptPath) & \" -a -r \" & QuoteArg(portName) & \" -h \" & QuoteArg(hostIp) & \" -o raw -n \" & CStr(portNumber)");
+    appendVbLine(&vbScript, L"        result = RunCommand(commandLine)");
+    appendVbLine(&vbScript, L"        WScript.Sleep 500");
+    appendVbLine(&vbScript, L"    End If");
+    appendVbLine(&vbScript, L"    EnsurePrinterPort = PrinterPortExists(portName)");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function FindInstalledDriver(targetName)");
+    appendVbLine(&vbScript, L"    Dim service, drivers, item, currentName, targetLower, currentLower");
+    appendVbLine(&vbScript, L"    FindInstalledDriver = \"\"");
+    appendVbLine(&vbScript, L"    If Len(Trim(targetName)) = 0 Then Exit Function");
+    appendVbLine(&vbScript, L"    On Error Resume Next");
+    appendVbLine(&vbScript, L"    Set service = OpenWmiService()");
+    appendVbLine(&vbScript, L"    If service Is Nothing Then On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    Set drivers = service.ExecQuery(\"SELECT Name FROM Win32_PrinterDriver\")");
+    appendVbLine(&vbScript, L"    targetLower = LCase(CStr(targetName))");
+    appendVbLine(&vbScript, L"    For Each item In drivers");
+    appendVbLine(&vbScript, L"        currentName = CStr(item.Name): currentLower = LCase(currentName)");
+    appendVbLine(&vbScript, L"        If currentLower = targetLower Then FindInstalledDriver = currentName: On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    Next");
+    appendVbLine(&vbScript, L"    For Each item In drivers");
+    appendVbLine(&vbScript, L"        currentName = CStr(item.Name): currentLower = LCase(currentName)");
+    appendVbLine(&vbScript, L"        If InStr(1, currentLower, targetLower, vbTextCompare) = 1 Or InStr(1, targetLower, currentLower, vbTextCompare) = 1 Then FindInstalledDriver = currentName: Exit For");
+    appendVbLine(&vbScript, L"    Next");
+    appendVbLine(&vbScript, L"    Err.Clear");
+    appendVbLine(&vbScript, L"    On Error GoTo 0");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function PrinterExists(targetName)");
+    appendVbLine(&vbScript, L"    Dim service, printers, item");
+    appendVbLine(&vbScript, L"    PrinterExists = False");
+    appendVbLine(&vbScript, L"    On Error Resume Next");
+    appendVbLine(&vbScript, L"    Set service = OpenWmiService()");
+    appendVbLine(&vbScript, L"    If service Is Nothing Then On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    Set printers = service.ExecQuery(\"SELECT Name FROM Win32_Printer WHERE Name='\" & EscapeWql(targetName) & \"'\")");
+    appendVbLine(&vbScript, L"    For Each item In printers");
+    appendVbLine(&vbScript, L"        PrinterExists = True");
+    appendVbLine(&vbScript, L"        Exit For");
+    appendVbLine(&vbScript, L"    Next");
+    appendVbLine(&vbScript, L"    Err.Clear");
+    appendVbLine(&vbScript, L"    On Error GoTo 0");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function InstallDriverFromInf(infPath, modelName)");
+    appendVbLine(&vbScript, L"    Dim commandLine, result");
+    appendVbLine(&vbScript, L"    InstallDriverFromInf = \"\"");
+    appendVbLine(&vbScript, L"    commandLine = QuoteArg(rundll32Path) & \" printui.dll,PrintUIEntry /ia /m \" & QuoteArg(modelName) & \" /f \" & QuoteArg(infPath) & \" /q\"");
+    appendVbLine(&vbScript, L"    result = RunCommand(commandLine)");
+    appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 800");
+    appendVbLine(&vbScript, L"    InstallDriverFromInf = FindInstalledDriver(modelName)");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function InstallDriverInFolder(folderPath, expectedName, modelName)");
+    appendVbLine(&vbScript, L"    Dim folder, file, subFolder, installed");
+    appendVbLine(&vbScript, L"    InstallDriverInFolder = \"\"");
+    appendVbLine(&vbScript, L"    On Error Resume Next");
+    appendVbLine(&vbScript, L"    Set folder = fso.GetFolder(folderPath)");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then Err.Clear: On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    On Error GoTo 0");
+    appendVbLine(&vbScript, L"    If Len(expectedName) > 0 Then");
+    appendVbLine(&vbScript, L"        For Each file In folder.Files");
+    appendVbLine(&vbScript, L"            If LCase(file.Name) = LCase(expectedName) Then installed = InstallDriverFromInf(file.Path, modelName): If Len(installed) > 0 Then InstallDriverInFolder = installed: Exit Function");
+    appendVbLine(&vbScript, L"        Next");
+    appendVbLine(&vbScript, L"    End If");
+    appendVbLine(&vbScript, L"    For Each file In folder.Files");
+    appendVbLine(&vbScript, L"        If LCase(fso.GetExtensionName(file.Name)) = \"inf\" And LCase(file.Name) <> LCase(expectedName) Then installed = InstallDriverFromInf(file.Path, modelName): If Len(installed) > 0 Then InstallDriverInFolder = installed: Exit Function");
+    appendVbLine(&vbScript, L"    Next");
+    appendVbLine(&vbScript, L"    For Each subFolder In folder.SubFolders");
+    appendVbLine(&vbScript, L"        installed = InstallDriverInFolder(subFolder.Path, expectedName, modelName): If Len(installed) > 0 Then InstallDriverInFolder = installed: Exit Function");
+    appendVbLine(&vbScript, L"    Next");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function InstallPrinterFromInf(infPath, modelName)");
+    appendVbLine(&vbScript, L"    Dim commandLine, result");
+    appendVbLine(&vbScript, L"    InstallPrinterFromInf = False");
+    appendVbLine(&vbScript, L"    commandLine = QuoteArg(rundll32Path) & \" printui.dll,PrintUIEntry /if /b \" & QuoteArg(printerName) & \" /f \" & QuoteArg(infPath) & \" /r \" & QuoteArg(portName) & \" /m \" & QuoteArg(modelName) & \" /z /q\"");
+    appendVbLine(&vbScript, L"    result = RunCommand(commandLine)");
+    appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 1200");
+    appendVbLine(&vbScript, L"    InstallPrinterFromInf = PrinterExists(printerName)");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function InstallPrinterInFolder(folderPath, expectedName, modelName)");
+    appendVbLine(&vbScript, L"    Dim folder, file, subFolder");
+    appendVbLine(&vbScript, L"    InstallPrinterInFolder = False");
+    appendVbLine(&vbScript, L"    On Error Resume Next");
+    appendVbLine(&vbScript, L"    Set folder = fso.GetFolder(folderPath)");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then Err.Clear: On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    On Error GoTo 0");
+    appendVbLine(&vbScript, L"    If Len(expectedName) > 0 Then");
+    appendVbLine(&vbScript, L"        For Each file In folder.Files");
+    appendVbLine(&vbScript, L"            If LCase(file.Name) = LCase(expectedName) Then If InstallPrinterFromInf(file.Path, modelName) Then InstallPrinterInFolder = True: Exit Function");
+    appendVbLine(&vbScript, L"        Next");
+    appendVbLine(&vbScript, L"    End If");
+    appendVbLine(&vbScript, L"    For Each file In folder.Files");
+    appendVbLine(&vbScript, L"        If LCase(fso.GetExtensionName(file.Name)) = \"inf\" And LCase(file.Name) <> LCase(expectedName) Then If InstallPrinterFromInf(file.Path, modelName) Then InstallPrinterInFolder = True: Exit Function");
+    appendVbLine(&vbScript, L"    Next");
+    appendVbLine(&vbScript, L"    For Each subFolder In folder.SubFolders");
+    appendVbLine(&vbScript, L"        If InstallPrinterInFolder(subFolder.Path, expectedName, modelName) Then InstallPrinterInFolder = True: Exit Function");
+    appendVbLine(&vbScript, L"    Next");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function EnsurePrinterQueue(targetDriverName)");
+    appendVbLine(&vbScript, L"    Dim scriptPath, commandLine, result");
+    appendVbLine(&vbScript, L"    EnsurePrinterQueue = False");
+    appendVbLine(&vbScript, L"    If PrinterExists(printerName) Then EnsurePrinterQueue = True: Exit Function");
+    appendVbLine(&vbScript, L"    scriptPath = FindPrintingScript(\"prnmngr.vbs\")");
+    appendVbLine(&vbScript, L"    If Len(scriptPath) = 0 Then Exit Function");
+    appendVbLine(&vbScript, L"    commandLine = QuoteArg(cscriptPath) & \" //nologo \" & QuoteArg(scriptPath) & \" -a -p \" & QuoteArg(printerName) & \" -m \" & QuoteArg(targetDriverName) & \" -r \" & QuoteArg(portName)");
+    appendVbLine(&vbScript, L"    result = RunCommand(commandLine)");
+    appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 800");
+    appendVbLine(&vbScript, L"    EnsurePrinterQueue = PrinterExists(printerName)");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function FolderFileCount(folderPath)");
+    appendVbLine(&vbScript, L"    Dim folder, file, subFolder, total");
+    appendVbLine(&vbScript, L"    total = 0");
+    appendVbLine(&vbScript, L"    On Error Resume Next");
+    appendVbLine(&vbScript, L"    Set folder = fso.GetFolder(folderPath)");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then Err.Clear: On Error GoTo 0: FolderFileCount = 0: Exit Function");
+    appendVbLine(&vbScript, L"    On Error GoTo 0");
+    appendVbLine(&vbScript, L"    For Each file In folder.Files: total = total + 1: Next");
+    appendVbLine(&vbScript, L"    For Each subFolder In folder.SubFolders: total = total + FolderFileCount(subFolder.Path): Next");
+    appendVbLine(&vbScript, L"    FolderFileCount = total");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function FolderFileSize(folderPath)");
+    appendVbLine(&vbScript, L"    Dim folder, file, subFolder, total");
+    appendVbLine(&vbScript, L"    total = 0");
+    appendVbLine(&vbScript, L"    On Error Resume Next");
+    appendVbLine(&vbScript, L"    Set folder = fso.GetFolder(folderPath)");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then Err.Clear: On Error GoTo 0: FolderFileSize = 0: Exit Function");
+    appendVbLine(&vbScript, L"    On Error GoTo 0");
+    appendVbLine(&vbScript, L"    For Each file In folder.Files: total = total + CDbl(file.Size): Next");
+    appendVbLine(&vbScript, L"    For Each subFolder In folder.SubFolders: total = total + FolderFileSize(subFolder.Path): Next");
+    appendVbLine(&vbScript, L"    FolderFileSize = total");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function ExtractArchive(zipPath, destinationPath)");
+    appendVbLine(&vbScript, L"    Dim archiveNamespace, destinationNamespace, lastCount, lastSize, stableChecks, count, size, i");
+    appendVbLine(&vbScript, L"    ExtractArchive = False");
+    appendVbLine(&vbScript, L"    On Error Resume Next");
+    appendVbLine(&vbScript, L"    If fso.FolderExists(destinationPath) Then fso.DeleteFolder destinationPath, True");
+    appendVbLine(&vbScript, L"    fso.CreateFolder destinationPath");
+    appendVbLine(&vbScript, L"    Set archiveNamespace = shell.Namespace(zipPath)");
+    appendVbLine(&vbScript, L"    Set destinationNamespace = shell.Namespace(destinationPath)");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then Err.Clear: On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    If archiveNamespace Is Nothing Or destinationNamespace Is Nothing Then On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    destinationNamespace.CopyHere archiveNamespace.Items, 16");
+    appendVbLine(&vbScript, L"    lastCount = -1: lastSize = -1: stableChecks = 0");
+    appendVbLine(&vbScript, L"    For i = 1 To 240");
+    appendVbLine(&vbScript, L"        WScript.Sleep 500");
+    appendVbLine(&vbScript, L"        count = FolderFileCount(destinationPath): size = FolderFileSize(destinationPath)");
+    appendVbLine(&vbScript, L"        If count > 0 And count = lastCount And size = lastSize Then stableChecks = stableChecks + 1 Else stableChecks = 0");
+    appendVbLine(&vbScript, L"        If count > 0 And stableChecks >= 4 Then ExtractArchive = True: Exit For");
+    appendVbLine(&vbScript, L"        lastCount = count: lastSize = size");
+    appendVbLine(&vbScript, L"    Next");
+    appendVbLine(&vbScript, L"    Err.Clear");
+    appendVbLine(&vbScript, L"    On Error GoTo 0");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"If Not EnsurePrinterPort() Then");
+    appendVbLine(&vbScript, L"    MsgBox createPortError & portName, vbExclamation, missingTitle");
+    appendVbLine(&vbScript, L"    WScript.Quit 1");
+    appendVbLine(&vbScript, L"End If");
+    appendVbLine(&vbScript, L"packageExpanded = False");
+    appendVbLine(&vbScript, L"queueCreated = False");
+    appendVbLine(&vbScript, L"driverName = FindInstalledDriver(requestedDriverName)");
+    appendVbLine(&vbScript, L"If Len(driverName) > 0 Then queueCreated = EnsurePrinterQueue(driverName)");
+    appendVbLine(&vbScript, L"driverArchiveExists = fso.FileExists(archivePath)");
+    appendVbLine(&vbScript, L"If Not queueCreated And driverArchiveExists Then");
+    appendVbLine(&vbScript, L"    If ExtractArchive(archivePath, tempRoot) Then packageExpanded = True");
+    appendVbLine(&vbScript, L"    If packageExpanded Then");
+    appendVbLine(&vbScript, L"        installedDriver = InstallDriverInFolder(tempRoot, driverInfName, requestedDriverName)");
+    appendVbLine(&vbScript, L"        If Len(installedDriver) > 0 Then driverName = installedDriver: queueCreated = EnsurePrinterQueue(driverName)");
+    appendVbLine(&vbScript, L"        If Not queueCreated Then queueCreated = InstallPrinterInFolder(tempRoot, driverInfName, requestedDriverName)");
+    appendVbLine(&vbScript, L"    End If");
+    appendVbLine(&vbScript, L"End If");
+    appendVbLine(&vbScript, L"If fso.FolderExists(tempRoot) Then On Error Resume Next: fso.DeleteFolder tempRoot, True: On Error GoTo 0");
+    appendVbLine(&vbScript, L"If PrinterExists(printerName) Then");
+    appendVbLine(&vbScript, L"    MsgBox successMessage, vbInformation, successTitle");
+    appendVbLine(&vbScript, L"    shell.Run \"explorer.exe shell:PrintersFolder\", 1, False");
+    appendVbLine(&vbScript, L"    WScript.Quit 0");
+    appendVbLine(&vbScript, L"End If");
+    appendVbLine(&vbScript, L"If Len(driverName) > 0 Then");
+    appendVbLine(&vbScript, L"    MsgBox queueFailedMessage, vbExclamation, queueFailedTitle");
+    appendVbLine(&vbScript, L"Else");
+    appendVbLine(&vbScript, L"    MsgBox missingMessage, vbExclamation, missingTitle");
+    appendVbLine(&vbScript, L"End If");
+    appendVbLine(&vbScript, L"shell.Run \"rundll32.exe printui.dll,PrintUIEntry /il\", 1, False");
+    appendVbLine(&vbScript, L"WScript.Quit 1");
+
+    std::wostringstream batch;
+    batch << L"@echo off\r\n";
+    batch << L"rem " << kAppDisplayName << L" installer (CMD + Windows Script Host)\r\n";
+    batch << L"setlocal EnableExtensions EnableDelayedExpansion\r\n\r\n";
+    batch << L"set \"SCRIPT_DIR=%~dp0\"\r\n";
+    batch << L"set \"SELF=%~f0\"\r\n";
+    batch << L"set \"VBSOUT=%TEMP%\\PrtEasyServer_Setup_%RANDOM%_%RANDOM%.vbs\"\r\n\r\n";
+    batch << L"if exist \"%SystemRoot%\\System32\\cscript.exe\" goto vbs_ready\r\n";
+    batch << L"echo Windows Script Host (cscript.exe) is required to install this printer.\r\n";
+    batch << L"pause\r\n";
+    batch << L"exit /b 1\r\n";
+    batch << L":vbs_ready\r\n\r\n";
+    batch << L"if exist \"%VBSOUT%\" del /q \"%VBSOUT%\" >nul 2>nul\r\n";
+    batch << L"for /f \"usebackq delims=\" %%L in (`findstr /b /c:\"#VBS# \" \"%SELF%\"`) do (\r\n";
+    batch << L"    set \"VBSLINE=%%L\"\r\n";
+    batch << L"    >>\"%VBSOUT%\" echo(!VBSLINE:*#VBS# =!\r\n";
+    batch << L")\r\n";
+    batch << L"if exist \"%VBSOUT%\" goto vbs_extracted\r\n";
+    batch << L"echo Failed to extract the embedded installer script.\r\n";
+    batch << L"pause\r\n";
+    batch << L"exit /b 1\r\n";
+    batch << L":vbs_extracted\r\n\r\n";
+    batch << L"\"%SystemRoot%\\System32\\cscript.exe\" //nologo \"%VBSOUT%\"\r\n";
+    batch << L"set \"ERR=%ERRORLEVEL%\"\r\n";
+    batch << L"del /q \"%VBSOUT%\" >nul 2>nul\r\n";
+    batch << L"if \"%ERR%\"==\"0\" goto installer_success\r\n";
+    batch << L"echo Installer failed. ErrorLevel=%ERR%\r\n";
+    batch << L"pause\r\n";
+    batch << L"exit /b %ERR%\r\n";
+    batch << L":installer_success\r\n";
+    batch << L"endlocal\r\n";
+    batch << L"exit /b 0\r\n\r\n";
+    batch << L"# VBS_START - ASCII VBScript follows\r\n";
+    std::wistringstream vbLines(vbScript);
+    std::wstring line;
+    while (std::getline(vbLines, line)) {
+        if (!line.empty() && line.back() == L'\r') {
+            line.pop_back();
+        }
+        batch << L"#VBS# " << line << L"\r\n";
+    }
+    return batch.str();
+
+#if 0
     const AppConfig config = GetConfigCopy();
     LocalizationManager localizer;
     localizer.Initialize(config.language);
@@ -1689,6 +2297,7 @@ if ($printerInstalled) {
     }
 
     return batch.str();
+#endif
 }
 
 std::string PrinterServer::RenderWebPage() const {
