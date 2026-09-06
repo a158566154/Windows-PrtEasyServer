@@ -1,0 +1,52 @@
+name: Build Windows x64
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2019
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC x64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build resources
+        shell: cmd
+        run: >-
+          if not exist build mkdir build &&
+          rc.exe /nologo /fo build\resources.res src\resources.rc
+
+      - name: Build application
+        shell: cmd
+        run: >-
+          cl.exe /nologo /std:c++17 /EHsc /W4 /utf-8 /DNOMINMAX /DUNICODE /D_UNICODE
+          /D_WIN32_WINNT=0x0601 /I src
+          src\main.cpp src\main_window.cpp src\printer_server.cpp
+          src\config.cpp src\localization.cpp src\common.cpp
+          build\resources.res
+          /link /SUBSYSTEM:WINDOWS /MACHINE:X64
+          /OUT:build\PrtEasyServer.exe
+
+      - name: Embed application manifest
+        shell: cmd
+        run: >-
+          mt.exe /nologo
+          /manifest build\PrtEasyServer.exe.manifest
+          "-outputresource:build\PrtEasyServer.exe;#1" &&
+          del build\PrtEasyServer.exe.manifest
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrtEasyServer-windows-x64
+          path: build/PrtEasyServer.exe
+          if-no-files-found: error
