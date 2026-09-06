@@ -1132,13 +1132,14 @@ bool PrinterServer::CreateDriverArchiveFromManifest(const DriverManifestInfo& in
     DWORD exitCode = 0;
     std::wstring output;
     const bool ran = RunPowerShellScript(zipScript, &exitCode, &output);
+    const DWORD processError = ran ? ERROR_SUCCESS : ::GetLastError();
 
     DeleteDirectoryTree(tempRoot);
 
     if (!ran || exitCode != 0 || !FileExists(archivePath)) {
         if (errorText) {
             *errorText = output.empty()
-                ? (ran ? L"PowerShell ZIP creation failed." : L"PowerShell process could not be started: " + FormatLastErrorMessage())
+                ? (ran ? L"PowerShell ZIP creation failed." : L"PowerShell process could not be started: " + FormatErrorMessage(processError))
                 : output;
         }
         DeleteFileW(archivePath.c_str());
@@ -1219,13 +1220,14 @@ bool PrinterServer::CreateDriverArchiveFromFolder(const std::wstring& sourceFold
     DWORD exitCode = 0;
     std::wstring output;
     const bool ran = RunPowerShellScript(zipScript, &exitCode, &output);
+    const DWORD processError = ran ? ERROR_SUCCESS : ::GetLastError();
 
     DeleteDirectoryTree(tempRoot);
 
     if (!ran || exitCode != 0 || !FileExists(archivePath)) {
         if (errorText) {
             *errorText = output.empty()
-                ? (ran ? L"PowerShell ZIP creation failed for the driver folder." : L"PowerShell process could not be started: " + FormatLastErrorMessage())
+                ? (ran ? L"PowerShell ZIP creation failed for the driver folder." : L"PowerShell process could not be started: " + FormatErrorMessage(processError))
                 : output;
         }
         DeleteFileW(archivePath.c_str());

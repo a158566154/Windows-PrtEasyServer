@@ -403,6 +403,8 @@ bool RunHiddenProcess(const std::wstring& commandLine, DWORD* exitCode, std::wst
         &si,
         &pi);
 
+    const DWORD createError = created ? ERROR_SUCCESS : ::GetLastError();
+
     if (capture && writePipe) {
         ::CloseHandle(writePipe);
         writePipe = nullptr;
@@ -412,6 +414,7 @@ bool RunHiddenProcess(const std::wstring& commandLine, DWORD* exitCode, std::wst
         if (readPipe) {
             ::CloseHandle(readPipe);
         }
+        ::SetLastError(createError);
         return false;
     }
 
@@ -470,9 +473,15 @@ bool RunPowerShellScript(const std::wstring& script, DWORD* exitCode, std::wstri
         return false;
     }
 
-    const std::wstring command = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"" + scriptPath + L"\"";
+    const std::wstring windowsDirectory = GetEnvVar(L"WINDIR").empty() ? L"C:\\Windows" : GetEnvVar(L"WINDIR");
+    const std::wstring powershellPath = JoinPath(windowsDirectory, L"System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    const std::wstring command = L"\"" + powershellPath + L"\" -NoProfile -ExecutionPolicy Bypass -File \"" + scriptPath + L"\"";
     const bool result = RunHiddenProcess(command, exitCode, capturedStdout);
+    const DWORD processError = result ? ERROR_SUCCESS : ::GetLastError();
     ::DeleteFileW(scriptPath.c_str());
+    if (!result) {
+        ::SetLastError(processError);
+    }
     return result;
 }
 
