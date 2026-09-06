@@ -1638,15 +1638,22 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    EscapeWql = Replace(CStr(value), \"'\", \"''\")");
     appendVbLine(&vbScript, L"End Function");
 
-    appendVbLine(&vbScript, L"Function RunCommand(commandLine)");
-    appendVbLine(&vbScript, L"    Dim result");
+    appendVbLine(&vbScript, L"Function RunCommand(commandLine, timeoutMs)");
+    appendVbLine(&vbScript, L"    Dim process, started, elapsed");
     appendVbLine(&vbScript, L"    On Error Resume Next");
     appendVbLine(&vbScript, L"    Err.Clear");
-    appendVbLine(&vbScript, L"    result = shell.Run(commandLine, 0, True)");
-    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then result = -1");
+    appendVbLine(&vbScript, L"    Set process = shell.Exec(commandLine)");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then RunCommand = -1: Err.Clear: On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    started = Timer");
+    appendVbLine(&vbScript, L"    Do While process.Status = 0");
+    appendVbLine(&vbScript, L"        WScript.Sleep 250");
+    appendVbLine(&vbScript, L"        elapsed = (Timer - started) * 1000");
+    appendVbLine(&vbScript, L"        If elapsed < 0 Then elapsed = elapsed + 86400000");
+    appendVbLine(&vbScript, L"        If timeoutMs > 0 And elapsed >= timeoutMs Then process.Terminate: RunCommand = -2: On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    Loop");
+    appendVbLine(&vbScript, L"    RunCommand = process.ExitCode");
     appendVbLine(&vbScript, L"    Err.Clear");
     appendVbLine(&vbScript, L"    On Error GoTo 0");
-    appendVbLine(&vbScript, L"    RunCommand = result");
     appendVbLine(&vbScript, L"End Function");
 
     appendVbLine(&vbScript, L"Function FindPrintingScript(scriptName)");
@@ -1692,12 +1699,12 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    If Len(scriptPath) = 0 Then Exit Function");
     appendVbLine(&vbScript, L"    targetHost = hostName");
     appendVbLine(&vbScript, L"    commandLine = QuoteArg(cscriptPath) & \" //nologo \" & QuoteArg(scriptPath) & \" -a -r \" & QuoteArg(portName) & \" -h \" & QuoteArg(targetHost) & \" -o raw -n \" & CStr(portNumber)");
-    appendVbLine(&vbScript, L"    result = RunCommand(commandLine)");
+    appendVbLine(&vbScript, L"    result = RunCommand(commandLine, 60000)");
     appendVbLine(&vbScript, L"    WScript.Sleep 500");
     appendVbLine(&vbScript, L"    If PrinterPortExists(portName) Then EnsurePrinterPort = True: Exit Function");
     appendVbLine(&vbScript, L"    If Len(hostIp) > 0 And LCase(hostIp) <> LCase(targetHost) Then");
     appendVbLine(&vbScript, L"        commandLine = QuoteArg(cscriptPath) & \" //nologo \" & QuoteArg(scriptPath) & \" -a -r \" & QuoteArg(portName) & \" -h \" & QuoteArg(hostIp) & \" -o raw -n \" & CStr(portNumber)");
-    appendVbLine(&vbScript, L"        result = RunCommand(commandLine)");
+    appendVbLine(&vbScript, L"        result = RunCommand(commandLine, 60000)");
     appendVbLine(&vbScript, L"        WScript.Sleep 500");
     appendVbLine(&vbScript, L"    End If");
     appendVbLine(&vbScript, L"    EnsurePrinterPort = PrinterPortExists(portName)");
@@ -1743,7 +1750,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    Dim commandLine, result");
     appendVbLine(&vbScript, L"    InstallDriverFromInf = \"\"");
     appendVbLine(&vbScript, L"    commandLine = QuoteArg(rundll32Path) & \" printui.dll,PrintUIEntry /ia /m \" & QuoteArg(modelName) & \" /f \" & QuoteArg(infPath) & \" /q\"");
-    appendVbLine(&vbScript, L"    result = RunCommand(commandLine)");
+    appendVbLine(&vbScript, L"    result = RunCommand(commandLine, 120000)");
     appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 800");
     appendVbLine(&vbScript, L"    InstallDriverFromInf = FindInstalledDriver(modelName)");
     appendVbLine(&vbScript, L"End Function");
@@ -1772,7 +1779,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    Dim commandLine, result");
     appendVbLine(&vbScript, L"    InstallPrinterFromInf = False");
     appendVbLine(&vbScript, L"    commandLine = QuoteArg(rundll32Path) & \" printui.dll,PrintUIEntry /if /b \" & QuoteArg(printerName) & \" /f \" & QuoteArg(infPath) & \" /r \" & QuoteArg(portName) & \" /m \" & QuoteArg(modelName) & \" /z /q\"");
-    appendVbLine(&vbScript, L"    result = RunCommand(commandLine)");
+    appendVbLine(&vbScript, L"    result = RunCommand(commandLine, 120000)");
     appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 1200");
     appendVbLine(&vbScript, L"    InstallPrinterFromInf = PrinterExists(printerName)");
     appendVbLine(&vbScript, L"End Function");
@@ -1804,7 +1811,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    scriptPath = FindPrintingScript(\"prnmngr.vbs\")");
     appendVbLine(&vbScript, L"    If Len(scriptPath) = 0 Then Exit Function");
     appendVbLine(&vbScript, L"    commandLine = QuoteArg(cscriptPath) & \" //nologo \" & QuoteArg(scriptPath) & \" -a -p \" & QuoteArg(printerName) & \" -m \" & QuoteArg(targetDriverName) & \" -r \" & QuoteArg(portName)");
-    appendVbLine(&vbScript, L"    result = RunCommand(commandLine)");
+    appendVbLine(&vbScript, L"    result = RunCommand(commandLine, 60000)");
     appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 800");
     appendVbLine(&vbScript, L"    EnsurePrinterQueue = PrinterExists(printerName)");
     appendVbLine(&vbScript, L"End Function");
