@@ -473,8 +473,30 @@ bool RunPowerShellScript(const std::wstring& script, DWORD* exitCode, std::wstri
         return false;
     }
 
+    std::vector<std::wstring> powershellCandidates;
+    wchar_t systemDirectoryBuffer[MAX_PATH] = {};
+    const UINT systemDirectoryLength = ::GetSystemDirectoryW(systemDirectoryBuffer, _countof(systemDirectoryBuffer));
+    if (systemDirectoryLength > 0 && systemDirectoryLength < _countof(systemDirectoryBuffer)) {
+        powershellCandidates.push_back(JoinPath(systemDirectoryBuffer, L"WindowsPowerShell\\v1.0\\powershell.exe"));
+    }
+
     const std::wstring windowsDirectory = GetEnvVar(L"WINDIR").empty() ? L"C:\\Windows" : GetEnvVar(L"WINDIR");
-    const std::wstring powershellPath = JoinPath(windowsDirectory, L"System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    powershellCandidates.push_back(JoinPath(JoinPath(windowsDirectory, L"System32"), L"WindowsPowerShell\\v1.0\\powershell.exe"));
+    powershellCandidates.push_back(JoinPath(JoinPath(windowsDirectory, L"SysWOW64"), L"WindowsPowerShell\\v1.0\\powershell.exe"));
+
+    std::wstring powershellPath;
+    for (const std::wstring& candidate : powershellCandidates) {
+        if (FileExists(candidate)) {
+            powershellPath = candidate;
+            break;
+        }
+    }
+
+    // Keep PATH as a final fallback for non-standard Windows installations.
+    if (powershellPath.empty()) {
+        powershellPath = L"powershell.exe";
+    }
+
     const std::wstring command = L"\"" + powershellPath + L"\" -NoProfile -ExecutionPolicy Bypass -File \"" + scriptPath + L"\"";
     const bool result = RunHiddenProcess(command, exitCode, capturedStdout);
     const DWORD processError = result ? ERROR_SUCCESS : ::GetLastError();
