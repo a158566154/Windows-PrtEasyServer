@@ -1631,6 +1631,21 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    GetSystemFile = fileName");
     appendVbLine(&vbScript, L"End Function");
 
+    appendVbLine(&vbScript, L"Function FindFileRecursive(folderPath, targetName)");
+    appendVbLine(&vbScript, L"    Dim folder, file, subFolder, found");
+    appendVbLine(&vbScript, L"    FindFileRecursive = False");
+    appendVbLine(&vbScript, L"    On Error Resume Next");
+    appendVbLine(&vbScript, L"    Set folder = fso.GetFolder(folderPath)");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then Err.Clear: On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    On Error GoTo 0");
+    appendVbLine(&vbScript, L"    For Each file In folder.Files");
+    appendVbLine(&vbScript, L"        If LCase(file.Name) = LCase(targetName) Then FindFileRecursive = True: Exit Function");
+    appendVbLine(&vbScript, L"    Next");
+    appendVbLine(&vbScript, L"    For Each subFolder In folder.SubFolders");
+    appendVbLine(&vbScript, L"        found = FindFileRecursive(subFolder.Path, targetName): If found Then FindFileRecursive = True: Exit Function");
+    appendVbLine(&vbScript, L"    Next");
+    appendVbLine(&vbScript, L"End Function");
+
     appendVbLine(&vbScript, L"Function QuoteArg(value)");
     appendVbLine(&vbScript, L"    QuoteArg = Chr(34) & Replace(CStr(value), Chr(34), Chr(34) & Chr(34)) & Chr(34)");
     appendVbLine(&vbScript, L"End Function");
@@ -1855,6 +1870,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    For i = 1 To 240");
     appendVbLine(&vbScript, L"        WScript.Sleep 500");
     appendVbLine(&vbScript, L"        count = FolderFileCount(destinationPath): size = FolderFileSize(destinationPath)");
+    appendVbLine(&vbScript, L"        If Len(driverInfName) > 0 And FindFileRecursive(destinationPath, driverInfName) Then ExtractArchive = True: Exit For");
     appendVbLine(&vbScript, L"        If count > 0 And count = lastCount And size = lastSize Then stableChecks = stableChecks + 1 Else stableChecks = 0");
     appendVbLine(&vbScript, L"        If count > 0 And stableChecks >= 4 Then ExtractArchive = True: Exit For");
     appendVbLine(&vbScript, L"        lastCount = count: lastSize = size");
