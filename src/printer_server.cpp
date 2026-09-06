@@ -1591,7 +1591,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"Dim driverInfName, successTitle, successMessage, missingTitle, missingMessage");
     appendVbLine(&vbScript, L"Dim queueFailedTitle, queueFailedMessage, extractArchiveError, createPortError");
     appendVbLine(&vbScript, L"Dim packageExpanded, queueCreated, installedDriver, driverArchiveExists, commandResult");
-    appendVbLine(&vbScript, L"Dim cscriptPath, rundll32Path");
+    appendVbLine(&vbScript, L"Dim cscriptPath, rundll32Path, powershellPath");
     appendVbLine(&vbScript, LR"(Set fso = CreateObject("Scripting.FileSystemObject"))");
     appendVbLine(&vbScript, LR"(Set shell = CreateObject("WScript.Shell"))");
     appendVbLine(&vbScript, LR"(scriptDir = shell.Environment("PROCESS")("SCRIPT_DIR"))");
@@ -1618,6 +1618,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"createPortError = " + vbString(localizer.Get(L"installer_error_create_port")));
     appendVbLine(&vbScript, L"cscriptPath = GetSystemFile(\"cscript.exe\")");
     appendVbLine(&vbScript, L"rundll32Path = GetSystemFile(\"rundll32.exe\")");
+    appendVbLine(&vbScript, L"powershellPath = GetPowerShellFile()");
 
     appendVbLine(&vbScript, L"Function GetSystemFile(fileName)");
     appendVbLine(&vbScript, LR"(    Dim candidate)"
@@ -1629,6 +1630,16 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     );
     appendVbLine(&vbScript, L"    If fso.FileExists(candidate) Then GetSystemFile = candidate: Exit Function");
     appendVbLine(&vbScript, L"    GetSystemFile = fileName");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function GetPowerShellFile()");
+    appendVbLine(&vbScript, L"    Dim candidate, root");
+    appendVbLine(&vbScript, L"    root = shell.ExpandEnvironmentStrings(\"%WINDIR%\")");
+    appendVbLine(&vbScript, L"    candidate = root & \"\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\"");
+    appendVbLine(&vbScript, L"    If fso.FileExists(candidate) Then GetPowerShellFile = candidate: Exit Function");
+    appendVbLine(&vbScript, L"    candidate = root & \"\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe\"");
+    appendVbLine(&vbScript, L"    If fso.FileExists(candidate) Then GetPowerShellFile = candidate: Exit Function");
+    appendVbLine(&vbScript, L"    GetPowerShellFile = \"\"");
     appendVbLine(&vbScript, L"End Function");
 
     appendVbLine(&vbScript, L"Function FindFileRecursive(folderPath, targetName)");
@@ -1651,6 +1662,10 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"End Function");
     appendVbLine(&vbScript, L"Function EscapeWql(value)");
     appendVbLine(&vbScript, L"    EscapeWql = Replace(CStr(value), \"'\", \"''\")");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function QuotePs(value)");
+    appendVbLine(&vbScript, L"    QuotePs = \"'\" & Replace(CStr(value), \"'\", \"''\") & \"'\"");
     appendVbLine(&vbScript, L"End Function");
 
     appendVbLine(&vbScript, L"Function RunCommand(commandLine, timeoutMs)");
@@ -1764,6 +1779,11 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"Function InstallDriverFromInf(infPath, modelName)");
     appendVbLine(&vbScript, L"    Dim commandLine, result");
     appendVbLine(&vbScript, L"    InstallDriverFromInf = \"\"");
+    appendVbLine(&vbScript, L"    If Len(powershellPath) > 0 Then");
+    appendVbLine(&vbScript, L"        commandLine = QuoteArg(powershellPath) & \" -NoProfile -ExecutionPolicy Bypass -Command \" & QuoteArg(\"& { Add-PrinterDriver -Name \" & QuotePs(modelName) & \" -InfPath \" & QuotePs(infPath) & \" -ErrorAction Stop }\")");
+    appendVbLine(&vbScript, L"        result = RunCommand(commandLine, 120000)");
+    appendVbLine(&vbScript, L"        If result = 0 Then WScript.Sleep 1500: InstallDriverFromInf = FindInstalledDriver(modelName): If Len(InstallDriverFromInf) > 0 Then Exit Function");
+    appendVbLine(&vbScript, L"    End If");
     appendVbLine(&vbScript, L"    commandLine = QuoteArg(rundll32Path) & \" printui.dll,PrintUIEntry /ia /m \" & QuoteArg(modelName) & \" /f \" & QuoteArg(infPath) & \" /q\"");
     appendVbLine(&vbScript, L"    result = RunCommand(commandLine, 120000)");
     appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 1500");
@@ -1823,6 +1843,12 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    Dim scriptPath, commandLine, result");
     appendVbLine(&vbScript, L"    EnsurePrinterQueue = False");
     appendVbLine(&vbScript, L"    If PrinterExists(printerName) Then EnsurePrinterQueue = True: Exit Function");
+    appendVbLine(&vbScript, L"    If Len(powershellPath) > 0 Then");
+    appendVbLine(&vbScript, L"        commandLine = QuoteArg(powershellPath) & \" -NoProfile -ExecutionPolicy Bypass -Command \" & QuoteArg(\"& { Add-Printer -Name \" & QuotePs(printerName) & \" -DriverName \" & QuotePs(targetDriverName) & \" -PortName \" & QuotePs(portName) & \" -ErrorAction Stop }\")");
+    appendVbLine(&vbScript, L"        result = RunCommand(commandLine, 60000)");
+    appendVbLine(&vbScript, L"        If result = 0 Then WScript.Sleep 1500");
+    appendVbLine(&vbScript, L"        If PrinterExists(printerName) Then EnsurePrinterQueue = True: Exit Function");
+    appendVbLine(&vbScript, L"    End If");
     appendVbLine(&vbScript, L"    scriptPath = FindPrintingScript(\"prnmngr.vbs\")");
     appendVbLine(&vbScript, L"    If Len(scriptPath) = 0 Then Exit Function");
     appendVbLine(&vbScript, L"    commandLine = QuoteArg(cscriptPath) & \" //nologo \" & QuoteArg(scriptPath) & \" -a -p \" & QuoteArg(printerName) & \" -m \" & QuoteArg(targetDriverName) & \" -r \" & QuoteArg(portName)");
