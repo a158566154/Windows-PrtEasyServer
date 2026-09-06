@@ -1,0 +1,29 @@
+# Build outputs
+build/
+x64/
+Debug/
+Release/
+*.obj
+*.pch
+*.pdb
+*.ilk
+*.idb
+*.res
+*.lib
+*.exp
+*.exe
+*.tlog
+*.ipdb
+*.iobj
+*.log
+
+# IDE files
+.vs/
+*.suo
+*.user
+*.VC.db
+*.VC.opendb
+
+# Runtime files generated next to the EXE
+config.json
+language/
