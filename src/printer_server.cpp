@@ -1590,7 +1590,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"Dim printerName, requestedDriverName, driverName, portName, hostName, hostIp, portNumber");
     appendVbLine(&vbScript, L"Dim driverInfName, successTitle, successMessage, missingTitle, missingMessage");
     appendVbLine(&vbScript, L"Dim queueFailedTitle, queueFailedMessage, extractArchiveError, createPortError");
-    appendVbLine(&vbScript, L"Dim packageExpanded, queueCreated, installedDriver, driverArchiveExists");
+    appendVbLine(&vbScript, L"Dim packageExpanded, queueCreated, installedDriver, driverArchiveExists, commandResult");
     appendVbLine(&vbScript, L"Dim cscriptPath, rundll32Path");
     appendVbLine(&vbScript, LR"(Set fso = CreateObject("Scripting.FileSystemObject"))");
     appendVbLine(&vbScript, LR"(Set shell = CreateObject("WScript.Shell"))");
@@ -1751,7 +1751,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    InstallDriverFromInf = \"\"");
     appendVbLine(&vbScript, L"    commandLine = QuoteArg(rundll32Path) & \" printui.dll,PrintUIEntry /ia /m \" & QuoteArg(modelName) & \" /f \" & QuoteArg(infPath) & \" /q\"");
     appendVbLine(&vbScript, L"    result = RunCommand(commandLine, 120000)");
-    appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 800");
+    appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 1500");
     appendVbLine(&vbScript, L"    InstallDriverFromInf = FindInstalledDriver(modelName)");
     appendVbLine(&vbScript, L"End Function");
 
@@ -1780,7 +1780,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    InstallPrinterFromInf = False");
     appendVbLine(&vbScript, L"    commandLine = QuoteArg(rundll32Path) & \" printui.dll,PrintUIEntry /if /b \" & QuoteArg(printerName) & \" /f \" & QuoteArg(infPath) & \" /r \" & QuoteArg(portName) & \" /m \" & QuoteArg(modelName) & \" /z /q\"");
     appendVbLine(&vbScript, L"    result = RunCommand(commandLine, 120000)");
-    appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 1200");
+    appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 2000");
     appendVbLine(&vbScript, L"    InstallPrinterFromInf = PrinterExists(printerName)");
     appendVbLine(&vbScript, L"End Function");
 
@@ -1870,16 +1870,19 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"packageExpanded = False");
     appendVbLine(&vbScript, L"queueCreated = False");
     appendVbLine(&vbScript, L"driverName = FindInstalledDriver(requestedDriverName)");
-    appendVbLine(&vbScript, L"If Len(driverName) > 0 Then queueCreated = EnsurePrinterQueue(driverName)");
+    appendVbLine(&vbScript, L"If PrinterExists(printerName) Then queueCreated = True");
     appendVbLine(&vbScript, L"driverArchiveExists = fso.FileExists(archivePath)");
     appendVbLine(&vbScript, L"If Not queueCreated And driverArchiveExists Then");
     appendVbLine(&vbScript, L"    If ExtractArchive(archivePath, tempRoot) Then packageExpanded = True");
     appendVbLine(&vbScript, L"    If packageExpanded Then");
     appendVbLine(&vbScript, L"        installedDriver = InstallDriverInFolder(tempRoot, driverInfName, requestedDriverName)");
-    appendVbLine(&vbScript, L"        If Len(installedDriver) > 0 Then driverName = installedDriver: queueCreated = EnsurePrinterQueue(driverName)");
-    appendVbLine(&vbScript, L"        If Not queueCreated Then queueCreated = InstallPrinterInFolder(tempRoot, driverInfName, requestedDriverName)");
+    appendVbLine(&vbScript, L"        If Len(installedDriver) > 0 Then driverName = installedDriver Else driverName = requestedDriverName");
+    appendVbLine(&vbScript, L"        queueCreated = InstallPrinterInFolder(tempRoot, driverInfName, requestedDriverName)");
+    appendVbLine(&vbScript, L"        If Not queueCreated And Len(driverName) > 0 And LCase(driverName) <> LCase(requestedDriverName) Then queueCreated = InstallPrinterInFolder(tempRoot, driverInfName, driverName)");
+    appendVbLine(&vbScript, L"        If Not queueCreated And Len(driverName) > 0 Then queueCreated = EnsurePrinterQueue(driverName)");
     appendVbLine(&vbScript, L"    End If");
     appendVbLine(&vbScript, L"End If");
+    appendVbLine(&vbScript, L"If Not queueCreated And Len(driverName) > 0 Then queueCreated = EnsurePrinterQueue(driverName)");
     appendVbLine(&vbScript, L"If fso.FolderExists(tempRoot) Then On Error Resume Next: fso.DeleteFolder tempRoot, True: On Error GoTo 0");
     appendVbLine(&vbScript, L"If PrinterExists(printerName) Then");
     appendVbLine(&vbScript, L"    MsgBox successMessage, vbInformation, successTitle");
