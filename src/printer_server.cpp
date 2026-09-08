@@ -21,7 +21,21 @@ std::wstring SanitizeToken(const std::wstring& value) {
 }
 
 std::wstring MakeTcpPortName(const std::wstring& hostName, int port) {
-    return L"IP_" + SanitizeToken(hostName) + L"_" + std::to_wstring(port);
+    std::wstring token;
+    token.reserve(hostName.size());
+    for (wchar_t ch : hostName) {
+        if ((ch >= L'0' && ch <= L'9') || (ch >= L'A' && ch <= L'Z') ||
+            (ch >= L'a' && ch <= L'z') || ch == L'.' || ch == L'-') {
+            token.push_back(ch);
+        } else {
+            token.push_back(L'_');
+        }
+    }
+    token = Trim(token);
+    if (token.empty()) {
+        token = L"HOST";
+    }
+    return L"IP_" + token + L"_" + std::to_wstring(port);
 }
 
 std::wstring GetWindowsDirectoryPath() {
@@ -705,7 +719,7 @@ std::vector<WebPrinterEntry> PrinterServer::BuildWebEntries() const {
         entry.hostName = hostName;
         entry.hostIp = hostIp;
         entry.port = printer.port;
-        entry.tcpPortName = MakeTcpPortName(hostName, printer.port);
+        entry.tcpPortName = MakeTcpPortName(hostIp, printer.port);
         entry.driverArchiveName = SanitizeFileName(entry.driverName) + L".zip";
         entry.driverArchivePath = JoinPath(GetModuleDirectory(), entry.driverArchiveName);
         entries.push_back(entry);
@@ -1591,7 +1605,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"Dim driverInfName, successTitle, successMessage, missingTitle, missingMessage");
     appendVbLine(&vbScript, L"Dim queueFailedTitle, queueFailedMessage, extractArchiveError, createPortError");
     appendVbLine(&vbScript, L"Dim packageExpanded, queueCreated, installedDriver, driverArchiveExists, commandResult");
-    appendVbLine(&vbScript, L"Dim cscriptPath, rundll32Path, powershellPath");
+    appendVbLine(&vbScript, L"Dim cscriptPath, rundll32Path, powershellPath, driverVersion");
     appendVbLine(&vbScript, LR"(Set fso = CreateObject("Scripting.FileSystemObject"))");
     appendVbLine(&vbScript, LR"(Set shell = CreateObject("WScript.Shell"))");
     appendVbLine(&vbScript, LR"(scriptDir = shell.Environment("PROCESS")("SCRIPT_DIR"))");
@@ -1619,6 +1633,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"cscriptPath = GetSystemFile(\"cscript.exe\")");
     appendVbLine(&vbScript, L"rundll32Path = GetSystemFile(\"rundll32.exe\")");
     appendVbLine(&vbScript, L"powershellPath = GetPowerShellFile()");
+    appendVbLine(&vbScript, L"driverVersion = \"Type 3 - \" & ChrW(&H7528) & ChrW(&H6237) & ChrW(&H6A21) & ChrW(&H5F0F)");
 
     appendVbLine(&vbScript, L"Function GetSystemFile(fileName)");
     appendVbLine(&vbScript, LR"(    Dim candidate)"
@@ -1779,12 +1794,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"Function InstallDriverFromInf(infPath, modelName)");
     appendVbLine(&vbScript, L"    Dim commandLine, result");
     appendVbLine(&vbScript, L"    InstallDriverFromInf = \"\"");
-    appendVbLine(&vbScript, L"    If Len(powershellPath) > 0 Then");
-    appendVbLine(&vbScript, L"        commandLine = QuoteArg(powershellPath) & \" -NoProfile -ExecutionPolicy Bypass -Command \" & QuoteArg(\"& { & pnputil.exe /add-driver \" & QuotePs(infPath) & \" /install; if (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE } }\")");
-    appendVbLine(&vbScript, L"        result = RunCommand(commandLine, 120000)");
-    appendVbLine(&vbScript, L"        If result = 0 Then WScript.Sleep 2000: InstallDriverFromInf = FindInstalledDriver(modelName): If Len(InstallDriverFromInf) > 0 Then Exit Function");
-    appendVbLine(&vbScript, L"    End If");
-    appendVbLine(&vbScript, L"    commandLine = QuoteArg(rundll32Path) & \" printui.dll,PrintUIEntry /ia /m \" & QuoteArg(modelName) & \" /f \" & QuoteArg(infPath) & \" /q\"");
+    appendVbLine(&vbScript, L"    commandLine = QuoteArg(rundll32Path) & \" printui.dll,PrintUIEntry /ia /q /h x64 /v \" & QuoteArg(driverVersion) & \" /f \" & QuoteArg(infPath) & \" /m \" & QuoteArg(modelName)");
     appendVbLine(&vbScript, L"    result = RunCommand(commandLine, 120000)");
     appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 1500");
     appendVbLine(&vbScript, L"    InstallDriverFromInf = FindInstalledDriver(modelName)");
@@ -1813,12 +1823,6 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"Function InstallPrinterFromInf(infPath, modelName)");
     appendVbLine(&vbScript, L"    Dim commandLine, result");
     appendVbLine(&vbScript, L"    InstallPrinterFromInf = False");
-    appendVbLine(&vbScript, L"    If Len(powershellPath) > 0 Then");
-    appendVbLine(&vbScript, L"        commandLine = QuoteArg(powershellPath) & \" -NoProfile -ExecutionPolicy Bypass -Command \" & QuoteArg(\"& { Add-Printer -Name \" & QuotePs(printerName) & \" -DriverName \" & QuotePs(modelName) & \" -PortName \" & QuotePs(portName) & \" -ErrorAction Stop }\")");
-    appendVbLine(&vbScript, L"        result = RunCommand(commandLine, 60000)");
-    appendVbLine(&vbScript, L"        If result = 0 Then WScript.Sleep 1500");
-    appendVbLine(&vbScript, L"        If PrinterExists(printerName) Then InstallPrinterFromInf = True: Exit Function");
-    appendVbLine(&vbScript, L"    End If");
     appendVbLine(&vbScript, L"    commandLine = QuoteArg(rundll32Path) & \" printui.dll,PrintUIEntry /if /b \" & QuoteArg(printerName) & \" /f \" & QuoteArg(infPath) & \" /r \" & QuoteArg(portName) & \" /m \" & QuoteArg(modelName) & \" /z /q\"");
     appendVbLine(&vbScript, L"    result = RunCommand(commandLine, 120000)");
     appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 2000");
@@ -1849,12 +1853,6 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    Dim scriptPath, commandLine, result");
     appendVbLine(&vbScript, L"    EnsurePrinterQueue = False");
     appendVbLine(&vbScript, L"    If PrinterExists(printerName) Then EnsurePrinterQueue = True: Exit Function");
-    appendVbLine(&vbScript, L"    If Len(powershellPath) > 0 Then");
-    appendVbLine(&vbScript, L"        commandLine = QuoteArg(powershellPath) & \" -NoProfile -ExecutionPolicy Bypass -Command \" & QuoteArg(\"& { Add-Printer -Name \" & QuotePs(printerName) & \" -DriverName \" & QuotePs(targetDriverName) & \" -PortName \" & QuotePs(portName) & \" -ErrorAction Stop }\")");
-    appendVbLine(&vbScript, L"        result = RunCommand(commandLine, 60000)");
-    appendVbLine(&vbScript, L"        If result = 0 Then WScript.Sleep 1500");
-    appendVbLine(&vbScript, L"        If PrinterExists(printerName) Then EnsurePrinterQueue = True: Exit Function");
-    appendVbLine(&vbScript, L"    End If");
     appendVbLine(&vbScript, L"    scriptPath = FindPrintingScript(\"prnmngr.vbs\")");
     appendVbLine(&vbScript, L"    If Len(scriptPath) = 0 Then Exit Function");
     appendVbLine(&vbScript, L"    commandLine = QuoteArg(cscriptPath) & \" //nologo \" & QuoteArg(scriptPath) & \" -a -p \" & QuoteArg(printerName) & \" -m \" & QuoteArg(targetDriverName) & \" -r \" & QuoteArg(portName)");
