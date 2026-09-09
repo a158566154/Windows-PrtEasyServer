@@ -1597,14 +1597,18 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
 
     const std::wstring successMessage = ReplaceAll(localizer.Get(L"installer_success_message"),
                                                    L"__PRINTER_NAME__", entry.printerName);
+    const int webPort = GetWebPort();
+    const std::wstring driverUrl = L"http://" + entry.hostIp +
+        (webPort == 80 ? L"" : L":" + std::to_wstring(webPort)) +
+        L"/driver/" + std::to_wstring(entry.index) + L".zip";
     std::wstring vbScript;
     vbScript.reserve(26000);
     appendVbLine(&vbScript, L"Option Explicit");
-    appendVbLine(&vbScript, L"Dim fso, shell, scriptDir, archiveName, archivePath, tempRoot, tempDir");
+    appendVbLine(&vbScript, L"Dim fso, shell, scriptDir, archiveName, archivePath, driverUrl, tempRoot, tempDir");
     appendVbLine(&vbScript, L"Dim printerName, requestedDriverName, driverName, portName, hostName, hostIp, portNumber");
     appendVbLine(&vbScript, L"Dim driverInfName, successTitle, successMessage, missingTitle, missingMessage");
-    appendVbLine(&vbScript, L"Dim queueFailedTitle, queueFailedMessage, extractArchiveError, createPortError");
-    appendVbLine(&vbScript, L"Dim packageExpanded, queueCreated, installedDriver, driverArchiveExists, commandResult");
+    appendVbLine(&vbScript, L"Dim queueFailedTitle, queueFailedMessage, extractArchiveError, createPortError, downloadDriverError");
+    appendVbLine(&vbScript, L"Dim packageExpanded, queueCreated, installedDriver, driverArchiveExists, downloadedArchive, commandResult");
     appendVbLine(&vbScript, L"Dim cscriptPath, rundll32Path, powershellPath, driverVersion, logFile");
     appendVbLine(&vbScript, LR"(Set fso = CreateObject("Scripting.FileSystemObject"))");
     appendVbLine(&vbScript, LR"(Set shell = CreateObject("WScript.Shell"))");
@@ -1612,6 +1616,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, LR"(If Len(Trim(scriptDir)) = 0 Then scriptDir = fso.GetParentFolderName(WScript.ScriptFullName))");
     appendVbLine(&vbScript, L"archiveName = " + vbString(entry.driverArchiveName));
     appendVbLine(&vbScript, L"archivePath = fso.BuildPath(scriptDir, archiveName)");
+    appendVbLine(&vbScript, L"driverUrl = " + vbString(driverUrl));
     appendVbLine(&vbScript, LR"(tempDir = shell.ExpandEnvironmentStrings("%TEMP%"))");
     appendVbLine(&vbScript, LR"(tempRoot = fso.BuildPath(tempDir, "PrtEasyServer_" & fso.GetTempName))");
     appendVbLine(&vbScript, L"printerName = " + vbString(entry.printerName));
@@ -1631,6 +1636,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"queueFailedMessage = " + vbString(localizer.Get(L"installer_queue_failed_message")));
     appendVbLine(&vbScript, L"extractArchiveError = " + vbString(localizer.Get(L"installer_error_extract_archive")));
     appendVbLine(&vbScript, L"createPortError = " + vbString(localizer.Get(L"installer_error_create_port")));
+    appendVbLine(&vbScript, L"downloadDriverError = " + vbString(localizer.Get(L"installer_error_download_driver")));
     appendVbLine(&vbScript, L"cscriptPath = GetSystemFile(\"cscript.exe\")");
     appendVbLine(&vbScript, L"rundll32Path = GetSystemFile(\"rundll32.exe\")");
     appendVbLine(&vbScript, L"powershellPath = GetPowerShellFile()");
@@ -1693,6 +1699,40 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    On Error GoTo 0");
     appendVbLine(&vbScript, L"End Sub");
 
+    appendVbLine(&vbScript, L"Function DownloadWithProgId(progId, url, destinationPath)");
+    appendVbLine(&vbScript, L"    Dim request, stream");
+    appendVbLine(&vbScript, L"    DownloadWithProgId = False");
+    appendVbLine(&vbScript, L"    On Error Resume Next");
+    appendVbLine(&vbScript, L"    Err.Clear");
+    appendVbLine(&vbScript, L"    Set request = CreateObject(progId)");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then LogLine \"DOWNLOAD_COM_ERROR \" & progId & \" \" & CStr(Err.Number) & \" \" & Err.Description: Err.Clear: On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    request.Open \"GET\", url, False");
+    appendVbLine(&vbScript, L"    request.Send");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then LogLine \"DOWNLOAD_REQUEST_ERROR \" & progId & \" \" & CStr(Err.Number) & \" \" & Err.Description: Err.Clear: On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    If request.Status <> 200 Then LogLine \"DOWNLOAD_HTTP_STATUS \" & progId & \" \" & CStr(request.Status): On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    Set stream = CreateObject(\"ADODB.Stream\")");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then LogLine \"DOWNLOAD_STREAM_ERROR \" & CStr(Err.Number) & \" \" & Err.Description: Err.Clear: On Error GoTo 0: Exit Function");
+    appendVbLine(&vbScript, L"    stream.Type = 1");
+    appendVbLine(&vbScript, L"    stream.Open");
+    appendVbLine(&vbScript, L"    stream.Write request.ResponseBody");
+    appendVbLine(&vbScript, L"    stream.SaveToFile destinationPath, 2");
+    appendVbLine(&vbScript, L"    stream.Close");
+    appendVbLine(&vbScript, L"    If Err.Number = 0 And fso.FileExists(destinationPath) Then DownloadWithProgId = (fso.GetFile(destinationPath).Size > 22)");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then LogLine \"DOWNLOAD_SAVE_ERROR \" & CStr(Err.Number) & \" \" & Err.Description");
+    appendVbLine(&vbScript, L"    Err.Clear");
+    appendVbLine(&vbScript, L"    On Error GoTo 0");
+    appendVbLine(&vbScript, L"End Function");
+
+    appendVbLine(&vbScript, L"Function DownloadDriver(url, destinationPath)");
+    appendVbLine(&vbScript, L"    DownloadDriver = False");
+    appendVbLine(&vbScript, L"    LogLine \"DOWNLOAD_START \" & url");
+    appendVbLine(&vbScript, L"    If fso.FileExists(destinationPath) Then On Error Resume Next: fso.DeleteFile destinationPath, True: On Error GoTo 0");
+    appendVbLine(&vbScript, L"    If DownloadWithProgId(\"WinHttp.WinHttpRequest.5.1\", url, destinationPath) Then DownloadDriver = True: LogLine \"DOWNLOAD_OK WinHTTP \" & destinationPath: Exit Function");
+    appendVbLine(&vbScript, L"    If fso.FileExists(destinationPath) Then On Error Resume Next: fso.DeleteFile destinationPath, True: On Error GoTo 0");
+    appendVbLine(&vbScript, L"    If DownloadWithProgId(\"MSXML2.ServerXMLHTTP.6.0\", url, destinationPath) Then DownloadDriver = True: LogLine \"DOWNLOAD_OK MSXML \" & destinationPath: Exit Function");
+    appendVbLine(&vbScript, L"    LogLine \"DOWNLOAD_FAILED \" & url");
+    appendVbLine(&vbScript, L"End Function");
+
     appendVbLine(&vbScript, L"Function RunCommand(commandLine, timeoutMs)");
     appendVbLine(&vbScript, L"    LogLine \"COMMAND_START \" & commandLine");
     appendVbLine(&vbScript, L"    Dim process, started, elapsed");
@@ -1709,6 +1749,8 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    Loop");
     appendVbLine(&vbScript, L"    RunCommand = process.ExitCode");
     appendVbLine(&vbScript, L"    LogLine \"COMMAND_EXIT \" & CStr(RunCommand) & \" \" & commandLine");
+    appendVbLine(&vbScript, L"    LogLine \"COMMAND_STDOUT \" & process.StdOut.ReadAll");
+    appendVbLine(&vbScript, L"    LogLine \"COMMAND_STDERR \" & process.StdErr.ReadAll");
     appendVbLine(&vbScript, L"    Err.Clear");
     appendVbLine(&vbScript, L"    On Error GoTo 0");
     appendVbLine(&vbScript, L"End Function");
@@ -1788,6 +1830,19 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    On Error GoTo 0");
     appendVbLine(&vbScript, L"End Function");
 
+    appendVbLine(&vbScript, L"Function WaitForDriver(targetName, timeoutMs)");
+    appendVbLine(&vbScript, L"    Dim started, elapsed, detected");
+    appendVbLine(&vbScript, L"    WaitForDriver = \"\"");
+    appendVbLine(&vbScript, L"    started = Timer");
+    appendVbLine(&vbScript, L"    Do");
+    appendVbLine(&vbScript, L"        detected = FindInstalledDriver(targetName)");
+    appendVbLine(&vbScript, L"        If Len(detected) > 0 Then WaitForDriver = detected: Exit Function");
+    appendVbLine(&vbScript, L"        WScript.Sleep 500");
+    appendVbLine(&vbScript, L"        elapsed = (Timer - started) * 1000");
+    appendVbLine(&vbScript, L"        If elapsed < 0 Then elapsed = elapsed + 86400000");
+    appendVbLine(&vbScript, L"    Loop While elapsed < timeoutMs");
+    appendVbLine(&vbScript, L"End Function");
+
     appendVbLine(&vbScript, L"Function PrinterExists(targetName)");
     appendVbLine(&vbScript, L"    Dim service, printers, item");
     appendVbLine(&vbScript, L"    PrinterExists = False");
@@ -1795,6 +1850,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    Set service = OpenWmiService()");
     appendVbLine(&vbScript, L"    If service Is Nothing Then On Error GoTo 0: Exit Function");
     appendVbLine(&vbScript, L"    Set printers = service.ExecQuery(\"SELECT Name FROM Win32_Printer WHERE Name='\" & EscapeWql(targetName) & \"'\")");
+    appendVbLine(&vbScript, L"    If Err.Number <> 0 Then LogLine \"QUEUE_QUERY_ERROR \" & CStr(Err.Number) & \" \" & Err.Description: On Error GoTo 0: Exit Function");
     appendVbLine(&vbScript, L"    For Each item In printers");
     appendVbLine(&vbScript, L"        PrinterExists = True");
     appendVbLine(&vbScript, L"        Exit For");
@@ -1808,8 +1864,12 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    InstallDriverFromInf = \"\"");
     appendVbLine(&vbScript, L"    commandLine = QuoteArg(rundll32Path) & \" printui.dll,PrintUIEntry /ia /q /h x64 /v \" & QuoteArg(driverVersion) & \" /f \" & QuoteArg(infPath) & \" /m \" & QuoteArg(modelName)");
     appendVbLine(&vbScript, L"    result = RunCommand(commandLine, 120000)");
-    appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 1500");
-    appendVbLine(&vbScript, L"    InstallDriverFromInf = FindInstalledDriver(modelName)");
+    appendVbLine(&vbScript, L"    If result = 0 Then InstallDriverFromInf = WaitForDriver(modelName, 15000)");
+    appendVbLine(&vbScript, L"    If Len(InstallDriverFromInf) > 0 Then Exit Function");
+    appendVbLine(&vbScript, L"    LogLine \"SILENT_DRIVER_INSTALL_NOT_DETECTED; retrying interactively\"");
+    appendVbLine(&vbScript, L"    commandLine = QuoteArg(rundll32Path) & \" printui.dll,PrintUIEntry /ia /h x64 /v \" & QuoteArg(driverVersion) & \" /f \" & QuoteArg(infPath) & \" /m \" & QuoteArg(modelName)");
+    appendVbLine(&vbScript, L"    result = RunCommand(commandLine, 180000)");
+    appendVbLine(&vbScript, L"    If result = 0 Then InstallDriverFromInf = WaitForDriver(modelName, 30000)");
     appendVbLine(&vbScript, L"End Function");
 
     appendVbLine(&vbScript, L"Function InstallDriverInFolder(folderPath, expectedName, modelName)");
@@ -1925,8 +1985,22 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    On Error GoTo 0");
     appendVbLine(&vbScript, L"End Function");
 
+    appendVbLine(&vbScript, L"downloadedArchive = False");
+    appendVbLine(&vbScript, L"If Not fso.FileExists(archivePath) Then");
+    appendVbLine(&vbScript, L"    archivePath = fso.BuildPath(tempDir, \"PrtEasyServer_Driver_\" & CStr(portNumber) & \".zip\")");
+    appendVbLine(&vbScript, L"    If DownloadDriver(driverUrl, archivePath) Then");
+    appendVbLine(&vbScript, L"        downloadedArchive = True");
+    appendVbLine(&vbScript, L"    Else");
+    appendVbLine(&vbScript, L"        MsgBox downloadDriverError & driverUrl, vbExclamation, missingTitle");
+    appendVbLine(&vbScript, L"        WScript.Quit 1");
+    appendVbLine(&vbScript, L"    End If");
+    appendVbLine(&vbScript, L"Else");
+    appendVbLine(&vbScript, L"    LogLine \"USING_LOCAL_ARCHIVE \" & archivePath");
+    appendVbLine(&vbScript, L"End If");
+
     appendVbLine(&vbScript, L"If Not EnsurePrinterPort() Then");
     appendVbLine(&vbScript, L"    LogLine \"PORT_CREATE_FAILED \" & portName");
+    appendVbLine(&vbScript, L"    If downloadedArchive And fso.FileExists(archivePath) Then On Error Resume Next: fso.DeleteFile archivePath, True: On Error GoTo 0");
     appendVbLine(&vbScript, L"    MsgBox createPortError & portName, vbExclamation, missingTitle");
     appendVbLine(&vbScript, L"    WScript.Quit 1");
     appendVbLine(&vbScript, L"End If");
@@ -1945,7 +2019,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    If packageExpanded Then");
     appendVbLine(&vbScript, L"        installedDriver = InstallDriverInFolder(tempRoot, driverInfName, requestedDriverName)");
     appendVbLine(&vbScript, L"        If Len(installedDriver) > 0 Then driverName = installedDriver Else driverName = requestedDriverName");
-    appendVbLine(&vbScript, L"        LogLine \"DRIVER_AFTER_IMPORT \" & driverName");
+    appendVbLine(&vbScript, L"        LogLine \"DETECTED_DRIVER_AFTER_IMPORT \" & installedDriver");
     appendVbLine(&vbScript, L"        queueCreated = InstallPrinterInFolder(tempRoot, driverInfName, requestedDriverName)");
     appendVbLine(&vbScript, L"        If Not queueCreated And Len(driverName) > 0 And LCase(driverName) <> LCase(requestedDriverName) Then queueCreated = InstallPrinterInFolder(tempRoot, driverInfName, driverName)");
     appendVbLine(&vbScript, L"        If Not queueCreated And Len(driverName) > 0 Then queueCreated = EnsurePrinterQueue(driverName)");
@@ -1954,6 +2028,7 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"If Not queueCreated And Len(driverName) > 0 Then queueCreated = EnsurePrinterQueue(driverName)");
     appendVbLine(&vbScript, L"LogLine \"FINAL driver=\" & driverName & \" queue=\" & CStr(PrinterExists(printerName))");
     appendVbLine(&vbScript, L"If fso.FolderExists(tempRoot) Then On Error Resume Next: fso.DeleteFolder tempRoot, True: On Error GoTo 0");
+    appendVbLine(&vbScript, L"If downloadedArchive And fso.FileExists(archivePath) Then On Error Resume Next: fso.DeleteFile archivePath, True: On Error GoTo 0");
     appendVbLine(&vbScript, L"If PrinterExists(printerName) Then");
     appendVbLine(&vbScript, L"    MsgBox successMessage, vbInformation, successTitle");
     appendVbLine(&vbScript, L"    shell.Run \"explorer.exe shell:PrintersFolder\", 1, False");
