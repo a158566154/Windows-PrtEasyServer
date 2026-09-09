@@ -630,6 +630,10 @@ std::vector<PrinterConfigEntry> PrinterServer::GetActivePrinters() const {
     for (const PrinterConfigEntry& entry : config_.printers) {
         PrinterConfigEntry cleaned = entry;
         cleaned.printerName = Trim(cleaned.printerName);
+        cleaned.displayName = Trim(cleaned.displayName);
+        if (cleaned.displayName.empty()) {
+            cleaned.displayName = cleaned.printerName;
+        }
         if (!cleaned.printerName.empty() && cleaned.port > 0 && cleaned.port <= 65535) {
             active.push_back(cleaned);
         }
@@ -714,7 +718,8 @@ std::vector<WebPrinterEntry> PrinterServer::BuildWebEntries() const {
 
         WebPrinterEntry entry;
         entry.index = static_cast<int>(i + 1);
-        entry.printerName = details.printerName.empty() ? printer.printerName : details.printerName;
+        entry.sourcePrinterName = details.printerName.empty() ? printer.printerName : details.printerName;
+        entry.printerName = printer.displayName.empty() ? entry.sourcePrinterName : printer.displayName;
         entry.driverName = details.driverName.empty() ? printer.printerName : details.driverName;
         entry.hostName = hostName;
         entry.hostIp = hostIp;
@@ -1182,7 +1187,7 @@ bool PrinterServer::QueryDriverManifest(const WebPrinterEntry& entry, DriverMani
     }
 
     HANDLE printerHandle = nullptr;
-    if (!::OpenPrinterW(const_cast<LPWSTR>(entry.printerName.c_str()), &printerHandle, nullptr)) {
+    if (!::OpenPrinterW(const_cast<LPWSTR>(entry.sourcePrinterName.c_str()), &printerHandle, nullptr)) {
         if (errorText) {
             *errorText = L"OpenPrinter failed while reading driver details.";
         }
@@ -1848,11 +1853,10 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    On Error Resume Next");
     appendVbLine(&vbScript, L"    Set service = OpenWmiService()");
     appendVbLine(&vbScript, L"    If service Is Nothing Then On Error GoTo 0: Exit Function");
-    appendVbLine(&vbScript, L"    Set printers = service.ExecQuery(\"SELECT Name FROM Win32_Printer WHERE Name='\" & EscapeWql(targetName) & \"'\")");
+    appendVbLine(&vbScript, L"    Set printers = service.ExecQuery(\"SELECT Name, PortName FROM Win32_Printer WHERE Name='\" & EscapeWql(targetName) & \"'\")");
     appendVbLine(&vbScript, L"    If Err.Number <> 0 Then LogLine \"QUEUE_QUERY_ERROR \" & CStr(Err.Number) & \" \" & Err.Description: On Error GoTo 0: Exit Function");
     appendVbLine(&vbScript, L"    For Each item In printers");
-    appendVbLine(&vbScript, L"        PrinterExists = True");
-    appendVbLine(&vbScript, L"        Exit For");
+    appendVbLine(&vbScript, L"        If LCase(CStr(item.PortName)) = LCase(portName) Then PrinterExists = True: Exit For");
     appendVbLine(&vbScript, L"    Next");
     appendVbLine(&vbScript, L"    Err.Clear");
     appendVbLine(&vbScript, L"    On Error GoTo 0");

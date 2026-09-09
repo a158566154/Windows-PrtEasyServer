@@ -4,6 +4,7 @@
 
 struct PrinterConfigEntry {
     std::wstring printerName;
+    std::wstring displayName;
     int port = 9100;
 };
 

@@ -11,6 +11,7 @@ struct PrinterDetails {
 
 struct WebPrinterEntry {
     int index = 0;
+    std::wstring sourcePrinterName;
     std::wstring printerName;
     std::wstring driverName;
     std::wstring hostName;

@@ -21,6 +21,7 @@ private:
     enum ControlId {
         IdTabControl = 1001,
         IdPrinterCombo,
+        IdDisplayNameEdit,
         IdPortEdit,
         IdAddUpdateButton,
         IdRemoveButton,
@@ -75,6 +76,7 @@ private:
     int SuggestNextPrinterPort() const;
     void SetSuggestedNextPrinterPort();
     bool IsPortAlreadyUsed(int port, int ignoreRow) const;
+    bool IsDisplayNameAlreadyUsed(const std::wstring& displayName, int ignoreRow) const;
     bool HasConfiguredPrinters() const;
 
     void AppendLog(const std::wstring& message);
@@ -127,6 +129,8 @@ private:
     HWND configHintStatic_ = nullptr;
     HWND printerCombo_ = nullptr;
     HWND printerLabel_ = nullptr;
+    HWND displayNameEdit_ = nullptr;
+    HWND displayNameLabel_ = nullptr;
     HWND portEdit_ = nullptr;
     HWND portLabel_ = nullptr;
     HWND addUpdateButton_ = nullptr;

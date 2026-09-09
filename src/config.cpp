@@ -100,17 +100,15 @@ AppConfig ConfigStore::Load() const {
     config.minimizeToTray = ParseBoolValue(json, L"minimize_to_tray", true);
 
     std::vector<PrinterConfigEntry> printers;
-    const std::wregex printerPattern(
-        LR"PRINTER(\{[^{}]*"printer_name"\s*:\s*"((?:\\.|[^"])*)"\s*,\s*"port"\s*:\s*(\d+)[^{}]*\})PRINTER",
-        std::regex::icase);
+    const std::wregex printerPattern(LR"PRINTER(\{[^{}]*"printer_name"[^{}]*\})PRINTER", std::regex::icase);
     auto begin = std::wsregex_iterator(json.begin(), json.end(), printerPattern);
     auto end = std::wsregex_iterator();
     for (auto it = begin; it != end; ++it) {
         PrinterConfigEntry entry;
-        entry.printerName = (*it)[1].str();
-        entry.printerName = ReplaceAll(entry.printerName, L"\\\"", L"\"");
-        entry.printerName = ReplaceAll(entry.printerName, L"\\\\", L"\\");
-        entry.port = _wtoi((*it)[2].str().c_str());
+        const std::wstring objectJson = (*it)[0].str();
+        entry.printerName = ParseStringValue(objectJson, L"printer_name", L"");
+        entry.displayName = ParseStringValue(objectJson, L"display_name", entry.printerName);
+        entry.port = ParseIntValue(objectJson, L"port", 9100);
         if (entry.port <= 0) {
             entry.port = 9100;
         }
@@ -120,6 +118,7 @@ AppConfig ConfigStore::Load() const {
     if (printers.empty()) {
         PrinterConfigEntry legacy;
         legacy.printerName = ParseStringValue(json, L"printer_name", L"");
+        legacy.displayName = legacy.printerName;
         legacy.port = ParseIntValue(json, L"port", 9100);
         if (legacy.port <= 0) {
             legacy.port = 9100;
@@ -141,6 +140,7 @@ bool ConfigStore::Save(const AppConfig& config) const {
         const PrinterConfigEntry& entry = config.printers[i];
         output << L"    {\n";
         output << L"      \"printer_name\": \"" << JsonEscape(entry.printerName) << L"\",\n";
+        output << L"      \"display_name\": \"" << JsonEscape(Trim(entry.displayName).empty() ? entry.printerName : entry.displayName) << L"\",\n";
         output << L"      \"port\": " << entry.port << L"\n";
         output << L"    }";
         if (i + 1 < config.printers.size()) {

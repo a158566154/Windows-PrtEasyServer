@@ -656,6 +656,10 @@ void MainWindow::CreateServerPageControls() {
     printerCombo_ = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_COMBOBOXW, L"",
                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | WS_VSCROLL,
                                       0, 0, 10, 10, serverPage_, reinterpret_cast<HMENU>(IdPrinterCombo), instance_, nullptr);
+    displayNameLabel_ = CreateLabel(serverPage_, L"");
+    displayNameEdit_ = ::CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                                         0, 0, 10, 10, serverPage_, reinterpret_cast<HMENU>(IdDisplayNameEdit), instance_, nullptr);
+    ::SendMessageW(displayNameEdit_, EM_SETLIMITTEXT, 128, 0);
     portLabel_ = CreateLabel(serverPage_, L"");
     portEdit_ = ::CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
                                   0, 0, 10, 10, serverPage_, reinterpret_cast<HMENU>(IdPortEdit), instance_, nullptr);
@@ -673,12 +677,15 @@ void MainWindow::CreateServerPageControls() {
     ListView_SetExtendedListViewStyle(printerList_, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
     LVCOLUMNW col{};
     col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
-    col.cx = 380;
+    col.cx = 250;
     col.pszText = const_cast<LPWSTR>(L"Printer");
     ListView_InsertColumn(printerList_, 0, &col);
-    col.cx = 110;
-    col.pszText = const_cast<LPWSTR>(L"Port");
+    col.cx = 220;
+    col.pszText = const_cast<LPWSTR>(L"Client name");
     ListView_InsertColumn(printerList_, 1, &col);
+    col.cx = 90;
+    col.pszText = const_cast<LPWSTR>(L"Port");
+    ListView_InsertColumn(printerList_, 2, &col);
 
     webPortLabel_ = CreateLabel(serverPage_, L"");
     webPortEdit_ = ::CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"80", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
@@ -709,7 +716,7 @@ void MainWindow::CreateServerPageControls() {
     logEdit_ = ::CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
                                  0, 0, 10, 10, serverPage_, reinterpret_cast<HMENU>(IdLogEdit), instance_, nullptr);
 
-    for (HWND control : {configFrame_, configHintStatic_, printerLabel_, printerCombo_, portLabel_, portEdit_, addUpdateButton_, removeButton_,
+    for (HWND control : {configFrame_, configHintStatic_, printerLabel_, printerCombo_, displayNameLabel_, displayNameEdit_, portLabel_, portEdit_, addUpdateButton_, removeButton_,
                          refreshPrintersButton_, saveButton_, printerList_, webPortLabel_, webPortEdit_, webPortHintStatic_,
                          serverControlFrame_, statusDetailsStatic_, startButton_, stopButton_, openWebButton_, startupFrame_,
                          addStartupButton_, removeStartupButton_, logFrame_, logEdit_}) {
@@ -802,11 +809,14 @@ void MainWindow::LayoutServerPage(int width, int height) {
     ::MoveWindow(portEdit_, margin + 370, 96, 110, 24, TRUE);
     ::MoveWindow(addUpdateButton_, margin + 494, 94, 100, 28, TRUE);
 
-    ::MoveWindow(removeButton_, margin, 132, 90, 28, TRUE);
-    ::MoveWindow(refreshPrintersButton_, margin + 100, 132, 150, 28, TRUE);
-    ::MoveWindow(saveButton_, margin + 260, 132, 110, 28, TRUE);
+    ::MoveWindow(displayNameLabel_, margin, 132, 180, 20, TRUE);
+    ::MoveWindow(displayNameEdit_, margin + 190, 128, 300, 24, TRUE);
 
-    ::MoveWindow(printerList_, margin, 172, leftWidth - margin * 2, 190, TRUE);
+    ::MoveWindow(removeButton_, margin, 166, 90, 28, TRUE);
+    ::MoveWindow(refreshPrintersButton_, margin + 100, 166, 150, 28, TRUE);
+    ::MoveWindow(saveButton_, margin + 260, 166, 110, 28, TRUE);
+
+    ::MoveWindow(printerList_, margin, 204, leftWidth - margin * 2, 158, TRUE);
     ::MoveWindow(webPortLabel_, margin, 374, 110, 20, TRUE);
     ::MoveWindow(webPortEdit_, margin + 120, 370, 90, 24, TRUE);
     ::MoveWindow(webPortHintStatic_, margin + 220, 372, leftWidth - margin * 2 - 220, 22, TRUE);
@@ -876,6 +886,7 @@ void MainWindow::ApplyTranslations() {
     ::SetWindowTextW(configFrame_, localizer_.Get(L"frame_config").c_str());
     ::SetWindowTextW(configHintStatic_, localizer_.Get(L"config_hint").c_str());
     ::SetWindowTextW(printerLabel_, localizer_.Get(L"label_installed_printer").c_str());
+    ::SetWindowTextW(displayNameLabel_, localizer_.Get(L"label_display_name").c_str());
     ::SetWindowTextW(portLabel_, localizer_.Get(L"label_raw_port").c_str());
     ::SetWindowTextW(addUpdateButton_, (editingRow_ >= 0 ? localizer_.Get(L"button_update_group") : localizer_.Get(L"button_add_group")).c_str());
     ::SetWindowTextW(removeButton_, localizer_.Get(L"button_remove_group").c_str());
@@ -892,7 +903,8 @@ void MainWindow::ApplyTranslations() {
     ::SetWindowTextW(removeStartupButton_, localizer_.Get(L"button_remove_startup").c_str());
     ::SetWindowTextW(logFrame_, localizer_.Get(L"frame_server_logs").c_str());
     SetListViewColumnText(printerList_, 0, localizer_.Get(L"column_printer"));
-    SetListViewColumnText(printerList_, 1, localizer_.Get(L"column_port"));
+    SetListViewColumnText(printerList_, 1, localizer_.Get(L"column_display_name"));
+    SetListViewColumnText(printerList_, 2, localizer_.Get(L"column_port"));
 
     ::SetWindowTextW(appSettingsFrame_, localizer_.Get(L"frame_app_settings").c_str());
     ::SetWindowTextW(minimizeToTrayCheck_, localizer_.Get(L"setting_minimize_to_tray").c_str());
@@ -1016,6 +1028,7 @@ AppConfig MainWindow::CollectConfigFromUi(bool* ok, std::wstring* errorText) con
     }
 
     std::vector<int> ports;
+    std::vector<std::wstring> displayNames;
     for (const PrinterConfigEntry& printer : config.printers) {
         if (std::find(ports.begin(), ports.end(), printer.port) != ports.end()) {
             if (ok) {
@@ -1027,6 +1040,18 @@ AppConfig MainWindow::CollectConfigFromUi(bool* ok, std::wstring* errorText) con
             return config;
         }
         ports.push_back(printer.port);
+
+        const std::wstring normalizedDisplayName = ToLowerCopy(Trim(printer.displayName));
+        if (std::find(displayNames.begin(), displayNames.end(), normalizedDisplayName) != displayNames.end()) {
+            if (ok) {
+                *ok = false;
+            }
+            if (errorText) {
+                *errorText = localizer_.Get(L"message_duplicate_display_name");
+            }
+            return config;
+        }
+        displayNames.push_back(normalizedDisplayName);
     }
 
     if (ok) {
@@ -1047,8 +1072,10 @@ void MainWindow::UpdatePrinterListView(const std::vector<PrinterConfigEntry>& pr
         item.iItem = rowIndex;
         item.pszText = const_cast<LPWSTR>(printer.printerName.c_str());
         ListView_InsertItem(printerList_, &item);
+        std::wstring displayName = Trim(printer.displayName).empty() ? printer.printerName : printer.displayName;
+        ListView_SetItemText(printerList_, rowIndex, 1, const_cast<LPWSTR>(displayName.c_str()));
         std::wstring portText = std::to_wstring(printer.port);
-        ListView_SetItemText(printerList_, rowIndex, 1, const_cast<LPWSTR>(portText.c_str()));
+        ListView_SetItemText(printerList_, rowIndex, 2, const_cast<LPWSTR>(portText.c_str()));
         ++rowIndex;
     }
 }
@@ -1062,6 +1089,11 @@ std::vector<PrinterConfigEntry> MainWindow::ReadPrinterListView() const {
         ListView_GetItemText(printerList_, i, 0, buffer, _countof(buffer));
         entry.printerName = Trim(buffer);
         ListView_GetItemText(printerList_, i, 1, buffer, _countof(buffer));
+        entry.displayName = Trim(buffer);
+        if (entry.displayName.empty()) {
+            entry.displayName = entry.printerName;
+        }
+        ListView_GetItemText(printerList_, i, 2, buffer, _countof(buffer));
         entry.port = ParsePortValue(buffer, 0);
         if (!entry.printerName.empty() && entry.port > 0) {
             printers.push_back(entry);
@@ -1085,12 +1117,15 @@ void MainWindow::LoadSelectedPrinterIntoEditor() {
     ListView_GetItemText(printerList_, index, 0, buffer, _countof(buffer));
     const std::wstring printerName = buffer;
     ListView_GetItemText(printerList_, index, 1, buffer, _countof(buffer));
+    const std::wstring displayName = buffer;
+    ListView_GetItemText(printerList_, index, 2, buffer, _countof(buffer));
     const std::wstring portText = buffer;
 
     const LRESULT comboIndex = ::SendMessageW(printerCombo_, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(printerName.c_str()));
     if (comboIndex != CB_ERR) {
         ::SendMessageW(printerCombo_, CB_SETCURSEL, comboIndex, 0);
     }
+    SetEditText(displayNameEdit_, displayName);
     SetEditText(portEdit_, portText);
     editingRow_ = index;
     ::SetWindowTextW(addUpdateButton_, localizer_.Get(L"button_update_group").c_str());
@@ -1102,6 +1137,7 @@ void MainWindow::ResetPrinterEditor() {
     if (::SendMessageW(printerCombo_, CB_GETCOUNT, 0, 0) > 0) {
         ::SendMessageW(printerCombo_, CB_SETCURSEL, 0, 0);
     }
+    SetEditText(displayNameEdit_, L"");
     SetSuggestedNextPrinterPort();
 }
 
@@ -1124,8 +1160,24 @@ bool MainWindow::IsPortAlreadyUsed(int port, int ignoreRow) const {
         if (i == ignoreRow) {
             continue;
         }
-        ListView_GetItemText(printerList_, i, 1, buffer, _countof(buffer));
+        ListView_GetItemText(printerList_, i, 2, buffer, _countof(buffer));
         if (ParsePortValue(buffer, 0) == port) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool MainWindow::IsDisplayNameAlreadyUsed(const std::wstring& displayName, int ignoreRow) const {
+    const std::wstring normalized = ToLowerCopy(Trim(displayName));
+    const int count = ListView_GetItemCount(printerList_);
+    wchar_t buffer[512] = {};
+    for (int i = 0; i < count; ++i) {
+        if (i == ignoreRow) {
+            continue;
+        }
+        ListView_GetItemText(printerList_, i, 1, buffer, _countof(buffer));
+        if (ToLowerCopy(Trim(buffer)) == normalized) {
             return true;
         }
     }
@@ -1201,6 +1253,10 @@ void MainWindow::OnAddOrUpdatePrinter() {
     }
 
     const std::wstring printerName = Trim(printerBuffer);
+    std::wstring displayName = Trim(GetWindowTextString(displayNameEdit_));
+    if (displayName.empty()) {
+        displayName = printerName;
+    }
     const int port = ParsePortValue(GetWindowTextString(portEdit_), 0);
     if (printerName.empty()) {
         ::MessageBoxW(hwnd_, localizer_.Get(L"message_select_printer").c_str(), localizer_.Get(L"app_title").c_str(), MB_ICONWARNING | MB_OK);
@@ -1214,11 +1270,16 @@ void MainWindow::OnAddOrUpdatePrinter() {
         ::MessageBoxW(hwnd_, localizer_.Get(L"message_duplicate_port").c_str(), localizer_.Get(L"app_title").c_str(), MB_ICONWARNING | MB_OK);
         return;
     }
+    if (IsDisplayNameAlreadyUsed(displayName, editingRow_ >= 0 ? editingRow_ : -1)) {
+        ::MessageBoxW(hwnd_, localizer_.Get(L"message_duplicate_display_name").c_str(), localizer_.Get(L"app_title").c_str(), MB_ICONWARNING | MB_OK);
+        return;
+    }
 
     if (editingRow_ >= 0) {
         ListView_SetItemText(printerList_, editingRow_, 0, const_cast<LPWSTR>(printerName.c_str()));
+        ListView_SetItemText(printerList_, editingRow_, 1, const_cast<LPWSTR>(displayName.c_str()));
         std::wstring portText = std::to_wstring(port);
-        ListView_SetItemText(printerList_, editingRow_, 1, const_cast<LPWSTR>(portText.c_str()));
+        ListView_SetItemText(printerList_, editingRow_, 2, const_cast<LPWSTR>(portText.c_str()));
         const std::wstring pattern = localizer_.Get(L"log_updated_printer");
         AppendLog(FormatString(pattern.c_str(), printerName.c_str(), port));
     } else {
@@ -1227,8 +1288,9 @@ void MainWindow::OnAddOrUpdatePrinter() {
         item.iItem = ListView_GetItemCount(printerList_);
         item.pszText = const_cast<LPWSTR>(printerName.c_str());
         const int row = ListView_InsertItem(printerList_, &item);
+        ListView_SetItemText(printerList_, row, 1, const_cast<LPWSTR>(displayName.c_str()));
         std::wstring portText = std::to_wstring(port);
-        ListView_SetItemText(printerList_, row, 1, const_cast<LPWSTR>(portText.c_str()));
+        ListView_SetItemText(printerList_, row, 2, const_cast<LPWSTR>(portText.c_str()));
         const std::wstring pattern = localizer_.Get(L"log_added_printer");
         AppendLog(FormatString(pattern.c_str(), printerName.c_str(), port));
     }
