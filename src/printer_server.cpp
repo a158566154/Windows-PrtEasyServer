@@ -1929,6 +1929,13 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"    commandLine = QuoteArg(cscriptPath) & \" //nologo \" & QuoteArg(scriptPath) & \" -a -p \" & QuoteArg(printerName) & \" -m \" & QuoteArg(targetDriverName) & \" -r \" & QuoteArg(portName)");
     appendVbLine(&vbScript, L"    result = RunCommand(commandLine, 60000)");
     appendVbLine(&vbScript, L"    If result = 0 Then WScript.Sleep 800");
+    appendVbLine(&vbScript, L"    If PrinterExists(printerName) Then EnsurePrinterQueue = True: Exit Function");
+    appendVbLine(&vbScript, L"    If Len(powershellPath) > 0 Then");
+    appendVbLine(&vbScript, L"        LogLine \"PRNMNGR_FAILED; retrying Add-Printer\"");
+    appendVbLine(&vbScript, L"        commandLine = QuoteArg(powershellPath) & \" -NoProfile -ExecutionPolicy Bypass -Command \" & QuoteArg(\"& { Add-Printer -Name \" & QuotePs(printerName) & \" -DriverName \" & QuotePs(targetDriverName) & \" -PortName \" & QuotePs(portName) & \" -ErrorAction Stop }\")");
+    appendVbLine(&vbScript, L"        result = RunCommand(commandLine, 60000)");
+    appendVbLine(&vbScript, L"        If result = 0 Then WScript.Sleep 1500");
+    appendVbLine(&vbScript, L"    End If");
     appendVbLine(&vbScript, L"    EnsurePrinterQueue = PrinterExists(printerName)");
     appendVbLine(&vbScript, L"End Function");
 
@@ -2021,7 +2028,6 @@ std::wstring PrinterServer::BuildInstallerBatchContent(const WebPrinterEntry& en
     appendVbLine(&vbScript, L"        LogLine \"DETECTED_DRIVER_AFTER_IMPORT \" & installedDriver");
     appendVbLine(&vbScript, L"        queueCreated = InstallPrinterInFolder(tempRoot, driverInfName, requestedDriverName)");
     appendVbLine(&vbScript, L"        If Not queueCreated And Len(driverName) > 0 And LCase(driverName) <> LCase(requestedDriverName) Then queueCreated = InstallPrinterInFolder(tempRoot, driverInfName, driverName)");
-    appendVbLine(&vbScript, L"        If Not queueCreated And Len(driverName) > 0 Then queueCreated = EnsurePrinterQueue(driverName)");
     appendVbLine(&vbScript, L"    End If");
     appendVbLine(&vbScript, L"End If");
     appendVbLine(&vbScript, L"If Not queueCreated And Len(driverName) > 0 Then queueCreated = EnsurePrinterQueue(driverName)");
