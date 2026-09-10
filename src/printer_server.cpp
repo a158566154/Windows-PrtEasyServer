@@ -1069,25 +1069,39 @@ void PrinterServer::HandleRawClient(SOCKET clientSocket, sockaddr_in clientAddre
     unsigned long long totalWritten = 0;
     bool firstChunk = true;
     std::string description;
-    unsigned char buffer[65536] = {};
+    unsigned char recvBuffer[65536] = {};
+    std::vector<unsigned char> writeBuffer;
+    writeBuffer.reserve(262144);
 
     while (true) {
-        const int received = ::recv(clientSocket, reinterpret_cast<char*>(buffer), sizeof(buffer), 0);
+        const int received = ::recv(clientSocket, reinterpret_cast<char*>(recvBuffer), sizeof(recvBuffer), 0);
         if (received <= 0) {
             break;
         }
 
         if (firstChunk) {
-            std::vector<unsigned char> preview(buffer, buffer + received);
+            std::vector<unsigned char> preview(recvBuffer, recvBuffer + received);
             description = DetectRawDataDescription(preview);
             firstChunk = false;
         }
 
+        writeBuffer.insert(writeBuffer.end(), recvBuffer, recvBuffer + received);
+        totalReceived += received;
+
+        if (writeBuffer.size() >= 262144) {
+            DWORD written = 0;
+            if (::WritePrinter(printerHandle, writeBuffer.data(), static_cast<DWORD>(writeBuffer.size()), &written)) {
+                totalWritten += written;
+            }
+            writeBuffer.clear();
+        }
+    }
+
+    if (!writeBuffer.empty()) {
         DWORD written = 0;
-        if (::WritePrinter(printerHandle, buffer, static_cast<DWORD>(received), &written)) {
+        if (::WritePrinter(printerHandle, writeBuffer.data(), static_cast<DWORD>(writeBuffer.size()), &written)) {
             totalWritten += written;
         }
-        totalReceived += received;
     }
 
     ::EndPagePrinter(printerHandle);

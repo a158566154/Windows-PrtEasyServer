@@ -715,6 +715,7 @@ void MainWindow::CreateServerPageControls() {
     logFrame_ = CreateGroupBox(serverPage_, L"");
     logEdit_ = ::CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
                                  0, 0, 10, 10, serverPage_, reinterpret_cast<HMENU>(IdLogEdit), instance_, nullptr);
+    ::SendMessageW(logEdit_, EM_SETLIMITTEXT, 1024 * 1024, 0);
 
     for (HWND control : {configFrame_, configHintStatic_, printerLabel_, printerCombo_, displayNameLabel_, displayNameEdit_, portLabel_, portEdit_, addUpdateButton_, removeButton_,
                          refreshPrintersButton_, saveButton_, printerList_, webPortLabel_, webPortEdit_, webPortHintStatic_,
