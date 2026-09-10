@@ -1029,33 +1029,75 @@ void PrinterServer::HandleRawClient(SOCKET clientSocket, sockaddr_in clientAddre
                      printer.printerName.c_str(),
                      printer.port));
 
-    std::vector<unsigned char> data;
-    data.reserve(65536);
-    unsigned char buffer[8192] = {};
+    BOOL noDelay = TRUE;
+    ::setsockopt(clientSocket, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&noDelay), sizeof(noDelay));
+
+    HANDLE printerHandle = nullptr;
+    if (!::OpenPrinterW(const_cast<LPWSTR>(printer.printerName.c_str()), &printerHandle, nullptr)) {
+        Log(FormatString(UiText(L"OpenPrinter failed for %s: %s",
+                                L"\u958b\u555f\u5370\u8868\u6a5f %s \u5931\u6557\uff1a%s").c_str(),
+                         printer.printerName.c_str(), FormatLastErrorMessage().c_str()));
+        ::closesocket(clientSocket);
+        return;
+    }
+
+    DOC_INFO_1W docInfo{};
+    docInfo.pDocName = const_cast<LPWSTR>(L"PrtEasyServer RAW Job");
+    docInfo.pDatatype = const_cast<LPWSTR>(L"RAW");
+
+    DWORD jobId = ::StartDocPrinterW(printerHandle, 1, reinterpret_cast<LPBYTE>(&docInfo));
+    if (jobId == 0) {
+        Log(FormatString(UiText(L"StartDocPrinter failed for %s: %s",
+                                L"\u958b\u59cb\u5217\u5370\u5de5\u4f5c %s \u5931\u6557\uff1a%s").c_str(),
+                         printer.printerName.c_str(), FormatLastErrorMessage().c_str()));
+        ::ClosePrinter(printerHandle);
+        ::closesocket(clientSocket);
+        return;
+    }
+
+    if (!::StartPagePrinter(printerHandle)) {
+        Log(FormatString(UiText(L"StartPagePrinter failed for %s: %s",
+                                L"\u958b\u59cb\u5370\u5217\u5370\u9801\u9762 %s \u5931\u6557\uff1a%s").c_str(),
+                         printer.printerName.c_str(), FormatLastErrorMessage().c_str()));
+        ::EndDocPrinter(printerHandle);
+        ::ClosePrinter(printerHandle);
+        ::closesocket(clientSocket);
+        return;
+    }
+
+    unsigned long long totalReceived = 0;
+    unsigned long long totalWritten = 0;
+    bool firstChunk = true;
+    std::string description;
+    unsigned char buffer[65536] = {};
+
     while (true) {
         const int received = ::recv(clientSocket, reinterpret_cast<char*>(buffer), sizeof(buffer), 0);
         if (received <= 0) {
             break;
         }
-        data.insert(data.end(), buffer, buffer + received);
+
+        if (firstChunk) {
+            std::vector<unsigned char> preview(buffer, buffer + received);
+            description = DetectRawDataDescription(preview);
+            firstChunk = false;
+        }
+
+        DWORD written = 0;
+        if (::WritePrinter(printerHandle, buffer, static_cast<DWORD>(received), &written)) {
+            totalWritten += written;
+        }
+        totalReceived += received;
     }
 
+    ::EndPagePrinter(printerHandle);
+    ::EndDocPrinter(printerHandle);
+    ::ClosePrinter(printerHandle);
     ::closesocket(clientSocket);
 
-    if (data.empty()) {
-        Log(FormatString(UiText(L"Connection closed with no data from %s.",
-                                L"\u4f86\u81ea %s \u7684\u9023\u7dda\u672a\u50b3\u9001\u8cc7\u6599\u5c31\u5df2\u95dc\u9589\u3002").c_str(),
-                         clientLabel.c_str()));
-        return;
-    }
-
-    Log(FormatString(UiText(L"Received %u bytes (%S) for printer %s.",
-                            L"\u5df2\u63a5\u6536 %u \u4f4d\u5143\u7d44\uff08%S\uff09\uff0c\u76ee\u6a19\u5370\u8868\u6a5f\uff1a%s\u3002").c_str(),
-                     static_cast<unsigned int>(data.size()),
-                     DetectRawDataDescription(data).c_str(),
-                     printer.printerName.c_str()));
-
-    PrintRaw(data, printer.printerName);
+    Log(FormatString(UiText(L"Received %llu bytes (%S), sent %llu bytes to printer: %s.",
+                            L"\u5df2\u63a5\u6536 %llu \u4f4d\u5143\u7d44\uff08%S\uff09\uff0c\u5df2\u50b3\u9010 %llu \u4f4d\u5143\u7d44\u5230\u5370\u8868\u6a5f\uff1a%s\u3002").c_str(),
+                     totalReceived, description.c_str(), totalWritten, printer.printerName.c_str()));
 }
 
 void PrinterServer::SendHttpResponse(SOCKET clientSocket,
